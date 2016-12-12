@@ -1,0 +1,440 @@
+#!/usr/bin/env python3
+
+# This tool does variable substitution and generates special Resource Records
+#
+# To install on Debian:
+# pip3 install py3dns
+#
+# To define a variable: {{varname=value}}
+# To use a variable: {{varname}}
+# To create a special Resource Record: {{type:param1:param2:...}}
+#   optional params may be identified by keyword, e.g.: {{type:param1:param4name=value}}
+#
+# Special Resource Records available are:
+#   {{soa:primary_server:admin[:refresh:retry:expire:minimum:master_server:ttl]}}
+#       defaults are: refresh=4h, retry=1h, expire=14d, minimum=10m
+#   {{sshfp:[hostname:key_file:ttl]}}
+#       key_file defaults to 'ssh_host', if not abs path, looks in /etc/ssh
+#       key_file must not include _<type>_key.pub
+#   {{tlsa:port[:host:cert_file:usage:selector:proto:ttl]}
+#       if cert_file not abs path, looks in /etc/ssl/certs
+#       proto defaults to tcp
+#       usage one of pkix-ta, pkix-ee, dane-ta, dane-ee - defaults to pkix-ee
+#       selector one of cert, spki - defaults to cert
+#   {{smimea:user[:host:cert_file:usage:selector:ttl}}
+#       if cert_file not abs path, looks in /etc/ssl/certs
+#       usage one of pkix-ta, pkix-ee, dane-ta, dane-ee - defaults to pkix-ee
+#       selector one of cert, spki - defaults to cert
+#   {{acme:[challenge_file:ttl]}}
+#       if challenge_file not abs path, looks in /etc/ssl/challenges
+#   {{dkim:[domain:host:ttl]}}
+#   {{pgp:key_file[:ttl]}}
+#   {{caa:tag:caname[:flag:ttl]}}
+
+
+import sys
+import os
+import argparse
+import re
+import datetime
+import collections
+import base64
+import hashlib
+import json
+import subprocess
+
+import DNS
+
+class BindToolError(Exception):
+    pass
+
+
+class BindTool(object):
+    @classmethod
+    def Run(cls):
+        try:
+            tool = cls()
+            tool.run()
+            del tool
+        except BindToolError as error:
+            pass
+
+    def __init__(self):
+        argparser = argparse.ArgumentParser(description = 'Preprocess bind zone files')
+        argparser.add_argument('--version', action = 'version', version = '%(prog)s 0.1')
+        argparser.add_argument('zone_file_path')
+        argparser.add_argument('out_file_path', nargs = '?')
+        argparser.add_argument('-d', '--debug',
+                               action = 'store_true', dest = 'debug', default = False,
+                               help = 'print detailed debugging information to stdout')
+        argparser.add_argument('-c', '--config', 
+                               dest='config_path', default='bindtool.json', metavar='CONFIG_PATH',
+                               help='Specify file path for config')
+        self.args = argparser.parse_args()
+        if (not self.args.zone_file_path):
+            argparser.print_usage()
+
+        if (self.args.debug):
+            sys.excepthook = debug_hook
+
+        script_dir = os.path.dirname(os.path.realpath(__file__))
+        config_file_path = os.path.join(script_dir, self.args.config_path)
+        if (os.path.isfile(config_file_path)):
+            try:
+                with open(config_file_path) as config_file:
+                    self.config = json.load(config_file, object_pairs_hook=collections.OrderedDict)
+            except Exception as error:
+                self._error('Error reading config file: ', error, '\n')
+        else:
+            self.config = {}
+
+        self.certificates = {}
+        self.public_keys = {}
+
+    def _message(self, *args):
+        message = ''
+        for arg in args:
+            message += str(arg, 'utf-8', 'replace') if isinstance(arg, bytes) else str(arg)
+        return message
+
+    def _debug(self, *args):
+        if (self.args.debug):
+            sys.stdout.write(self._message(*args))
+
+    def _warn(self, *args):
+        sys.stderr.write('WARNING: ' + self._message(*args))
+
+    def _error(self, *args):
+        message = self._message(*args)
+        sys.stderr.write('ERROR: ' + message)
+        raise BindToolError(message)
+
+    def _config(self, key, default=None):
+        return self.config.get(key, default)
+
+    def _parse_params(self, params, names, defaults = {}):
+        out = defaults
+        while (0 < len(params)):
+            param = params.pop(0)
+            if ('=' in param):
+                name, value = param.split('=', 1)
+                name = name.strip()
+                if (name in names):
+                    names.remove(name)
+            else:
+                name = names.pop(0)
+                value = param
+            if (value):
+                out[name] = value.strip()
+        return out
+
+    def _generic_rr(self, type, value):
+        value = value.encode('ascii')
+        output = r'\# ' + str(len(value)) + ' '
+        data = ''
+        for ch in value:
+            data += ('00' + hex(ch)[2:])[-2:]
+        if (len(data) < 61):
+            output += data
+        else:
+            output += '(\n'
+            while (0 < len(data)):
+                output += '\t\t' + data[0:60] + '\n'
+                data = data[60:]
+            output += '\t)'
+        return 'TYPE' + str(type) + '\t' + output
+
+    def _load_certificate(self, cert_file_name):
+        if (cert_file_name in self.certificates):
+            return self.certificates[cert_file_name]
+        cert_file_path = os.path.join(self._config('certificate_path', '/etc/ssl/certs'), cert_file_name)
+        if (not os.path.isfile(cert_file_path)):
+            cert_file_path += '.pem'
+        if (os.path.isfile(cert_file_path)):
+            certificate = subprocess.check_output(['openssl', 'x509', '-in', cert_file_path, '-outform', 'DER'])
+            self.certificates[cert_file_name] = certificate
+            return certificate
+        self._error('Certificate file ', cert_file_path, ' not found\n')
+
+    def _extract_public_key(self, public_key_pem):
+        if (public_key_pem):
+            match = re.match(r'-----BEGIN PUBLIC KEY-----(.*?)-----END PUBLIC KEY-----', public_key_pem.decode('ascii'), re.DOTALL)
+            if (match):
+                return base64.b64decode(match.group(1))
+        return None
+
+    def _public_key_from_certificate(self, cert_file_path):
+        return self._extract_public_key(subprocess.check_output(['openssl', 'x509', '-in', cert_file_path, '-pubkey', '-noout']))
+
+    def _public_key_from_private_key(self, private_key_path):
+        return self._extract_public_key(subprocess.check_output(['openssl', 'rsa', '-in', private_key_path, '-pubout'], stderr = subprocess.DEVNULL))
+
+    def _load_public_key(self, cert_file_name):
+        if (cert_file_name in self.public_keys):
+            return self.public_keys[cert_file_name]
+        public_key = None
+        backup_public_key = None
+        cert_file_path = os.path.join(self._config('certificate_path', '/etc/ssl/certs'), cert_file_name)
+        if (not os.path.isfile(cert_file_path)):
+            cert_file_path += '.pem'
+        if (os.path.isfile(cert_file_path)):
+            public_key = self._public_key_from_certificate(cert_file_path)
+        else:
+            private_key_path = os.path.join(self._config('private_key_path', '/etc/ssl/private'), cert_file_name)
+            if (not os.path.isfile(private_key_path)):
+                private_key_path += '.key'
+            if (os.path.isfile(private_key_path)):
+                public_key = self._public_key_from_private_key(private_key_path)
+        backup_private_key_path = os.path.join(self._config('private_key_path', '/etc/ssl/private'), cert_file_name + '_backup')
+        if (not os.path.isfile(backup_private_key_path)):
+            backup_private_key_path += '.key'
+        if (os.path.isfile(backup_private_key_path)):
+            backup_public_key = self._public_key_from_private_key(backup_private_key_path)
+        if (public_key):
+            self.public_keys[cert_file_name] = (public_key, backup_public_key)
+            return (public_key, backup_public_key)
+        self._error('Certificate file ', cert_file_path, ' or private key file ', private_key_path, ' not found\n')
+
+    def _load_dkim_public_key(self, key_file_name):
+        key_file_path = os.path.join(self._config('dkim_path', '/etc/opendkim/keys'), key_file_name, 'default.private')
+        if (os.path.isfile(key_file_path)):
+            return subprocess.check_output(['openssl', 'rsa', '-in', key_file_path,  '-outform', 'DER', '-pubout'], stderr = subprocess.DEVNULL)
+        self._error('OpenDKIM key ', key_file_path, ' not found\n')
+
+    def soa_record(self, params, command, zone_name):
+        params = self._parse_params(params, ['primary_server', 'admin', 'refresh', 'retry', 'expire', 'minimum', 'master_server', 'ttl'], 
+                                    { 'refresh': '4h', 'retry': '1h', 'expire': '14d', 'minimum': '10m', 'master_server': '', 'ttl': ''})
+        if ('primary_server' not in params):
+            self._error('soa record must specify primary server {{', command, '}}\n')
+        if ('admin' not in params):
+            self._error('soa record must specify admin {{', command, '}}\n')
+        if (not params['primary_server'].endswith('.')):
+            params['primary_server'] += '.'
+        params['admin'] = params['admin'].replace('@', '.')
+        if (not params['admin'].endswith('.')):
+            params['admin'] += '.'
+        if (params['ttl']):
+            params['ttl'] = '\t' + params['ttl']
+
+        master_server = params['master_server'] if (params['master_server']) else params['primary_server']
+        response = DNS.Request().req(server=master_server, name=zone_name, qtype='SOA')
+        today = datetime.datetime.now().strftime('%Y%m%d')
+        existing_serial = str(response.answers[0]['data'][2][1]) if (response and ('NOERROR' == response.header['status'])) else '0'
+        self._debug('Found serial number ', existing_serial, '\n')
+        if (existing_serial and (existing_serial[0:8] == today)):
+            serial = today + str(int((existing_serial + '00')[8:10]) + 1).zfill(2)
+        else:
+            serial = today + '00'
+        if (int(serial) <= int(existing_serial)):   # ensure generated serial is greater than existing
+            serial = str(int(existing_serial) + 1)
+        self._debug('Using serial number ', serial, '\n')
+
+        return '@{ttl}\tSOA\t{primary_server} {admin} {serial} {refresh} {retry} {expire} {minimum}\n'.format(serial=serial, **params)
+
+    def sshfp_record(self, params, command, zone_name):
+        params = self._parse_params(params, ['host', 'key_file', 'ttl'], { 'host': '@', 'key_file': 'ssh_host', 'ttl': ''})
+        if (params['ttl']):
+            params['ttl'] = '\t' + params['ttl']
+
+        key_file_path = os.path.join(self._config('ssh_path', '/etc/ssh'), params['key_file'])
+        key_types = collections.OrderedDict([('rsa', 1), ('dsa', 2), ('ecdsa', 3), ('ed25519', 4)])
+        found = False
+        output = ''
+        for key_type in key_types:
+            if (os.path.isfile(key_file_path + '_' + key_type + '_key.pub')):
+                found = True
+                with open(key_file_path + '_' + key_type + '_key.pub') as keyFile:
+                    key_text = keyFile.read().split(' ')
+                    key = base64.b64decode(key_text[1])
+
+                    output += '{host}{ttl}\tSSHFP\t{key_type} 1 {digest}\n'.format(key_type=key_types[key_type], digest=hashlib.sha1(key).hexdigest(), **params)
+                    output += '{host}{ttl}\tSSHFP\t{key_type} 2 {digest}\n'.format(key_type=key_types[key_type], digest=hashlib.sha256(key).hexdigest(), **params)
+        if (not found):
+            self._warn("No SSH keys found for: ", params['host'], " matching: ", key_file_path, '\n')
+        return output
+
+    def tlsa_record(self, params, command, zone_name):
+        params = self._parse_params(params, ['port', 'host', 'cert_file', 'usage', 'selector', 'proto', 'ttl'],
+                                    {'port': '443', 'host': '', 'cert_file': zone_name, 'usage': 'pkix-ee', 'selector': 'spki', 'proto': 'tcp', 'ttl': ''})
+        if (not params['port'].isdigit()):
+            self._error('Port must be numeric for {{', command,'}}\n')
+        if (params['usage'] not in ('pkix-ta', 'pkix-ee', 'dane-ta', 'dane-ee')):
+            self._error('Unknown usage ', params['usage'], ' for {{', command, '}}\n')
+        if (params['selector'] not in ('cert', 'spki')):
+            self._error('Unknown selector ', params['selector'], ' for {{', command, '}}\n')
+        if (params['proto'] not in ('tcp', 'udp', 'sctp', 'dccp')):
+            self._error('Unknown protocol ', params['proto'], ' for {{', command, '}}\n')
+        if (params['host']):
+            params['host'] = '.' + params['host']
+        if (params['ttl']):
+            params['ttl'] = '\t' + params['ttl']
+
+        usage = { 'pkix-ta': '0', 'pkix-ee': '1', 'dane-ta': '2', 'dane-ee': '3' }
+        selector = { 'cert': '0', 'spki': '1' }
+
+        primary, backup = (self._load_certificate(params['cert_file']), None) if ('cert' == params['selector']) else self._load_public_key(params['cert_file'])
+
+        record = '_{port}._{proto}{host}{ttl}\tTLSA\t{usage_id} {selector_id} '.format(usage_id=usage[params['usage']], selector_id=selector[params['selector']], **params)
+        output = record + '1 {digest}\n'.format(digest=hashlib.sha256(primary).hexdigest())
+        output += record + '2 {digest}\n'.format(digest=hashlib.sha512(primary).hexdigest())
+        if (backup):
+            output += record + '1 {digest}\n'.format(digest=hashlib.sha256(backup).hexdigest())
+            output += record + '2 {digest}\n'.format(digest=hashlib.sha512(backup).hexdigest())
+        return output
+
+    def smimea_record(self, params, command, zone_name):
+        params = self._parse_params(params, ['user', 'host', 'cert_file', 'usage', 'selector', 'ttl'],
+                                    {'host': '', 'cert_file': zone_name, 'usage': 'pkix-ee', 'selector': 'cert', 'ttl': ''})
+        if ('user' not in params):
+            self._error('smimea record must specify user {{', command, '}}\n')
+        if (params['usage'] not in ('pkix-ta', 'pkix-ee', 'dane-ta', 'dane-ee')):
+            self._error('Unknown usage ', params['usage'], ' for {{', command, '}}\n')
+        if (params['selector'] not in ('cert', 'spki')):
+            self._error('Unknown selector ', params['selector'], ' for {{', command, '}}\n')
+        if ('*' != params['user']):
+            params['user'] = hashlib.sha256(params['user'].encode('utf-8')).hexdigest()
+        if (params['host']):
+            params['host'] = '.' + params['host']
+        if (params['ttl']):
+            params['ttl'] = '\t' + params['ttl']
+
+        usage = { 'pkix-ta': '0', 'pkix-ee': '1', 'dane-ta': '2', 'dane-ee': '3' }
+        selector = { 'cert': '0', 'spki': '1' }
+
+        primary, backup = (self._load_certificate(params['cert_file']), None) if ('cert' == params['selector']) else self._load_public_key(params['cert_file'])
+
+        record = '{user}._smimecert{host}{ttl}\tSMIMEA\t{usage_id} {selector_id} '.format(usage_id=usage[params['usage']], selector_id=selector[params['selector']], **params)
+        output = record + '1 {digest}\n'.format(digest=hashlib.sha256(primary).hexdigest())
+        output += record + '2 {digest}\n'.format(digest=hashlib.sha512(primary).hexdigest())
+        if (backup):
+            output += record + '1 {digest}\n'.format(digest=hashlib.sha256(backup).hexdigest())
+            output += record + '2 {digest}\n'.format(digest=hashlib.sha512(backup).hexdigest())
+        return output
+
+    def acme_record(self, params, command, zone_name):
+        params = self._parse_params(params, ['challenge_file', 'ttl'], { 'challenge_file': zone_name, 'ttl': '60' })
+        if (params['ttl']):
+            params['ttl'] = '\t' + params['ttl']
+
+        output = ''
+        challenge_path = os.path.join(self._config('acme_path', '/etc/ssl/challenges'), params['challenge_file'])
+        if (os.path.isfile(challenge_path)):
+            with open(challenge_path) as challenge_file:
+                challenges = json.load(challenge_file, object_pairs_hook=collections.OrderedDict)
+            for host in challenges:
+                output += '_acme-challenge.{host}.{ttl}\tTXT\t"{challenge}"\n'.format(host=host, challenge=challenges[host], **params)
+        else:
+            self._debug('ACME challenge file ', challenge_path, ' not found\n')
+        return output
+
+    def caa_record(self, params, command, zone_name):
+        params = self._parse_params(params, ['tag', 'caname', 'flag', 'ttl'], { 'flag': '1', 'ttl': '' })
+        if ('tag' not in params):
+            self._error('caa record must specify tag {{', command, '}}\n')
+        if ('caname' not in params):
+            self._error('caa record must specify caname {{', command, '}}\n')
+        if (params['ttl']):
+            params['ttl'] = '\t' + params['ttl']
+        return '@{ttl}\t{generic}\n'.format(generic=self._generic_rr(257, chr(int(params['flag'])) + chr(len(params['tag'])) + params['tag'] + params['caname']), **params) 
+
+    def dkim_record(self, params, command, zone_name):
+        params = self._parse_params(params, ['domain', 'host', 'ttl'], { 'domain': zone_name, 'host': '', 'ttl': '' })
+        if (params['host']):
+            params['host'] = '.' + params['host']
+        if (params['ttl']):
+            params['ttl'] = '\t' + params['ttl']
+
+        dkim_public_key = self._load_dkim_public_key(params['domain'])
+        return 'default._domainkey{host}{ttl}\tTXT\t"v=DKIM1; k=rsa; p={dkim_key}"\n'.format(dkim_key=base64.b64encode(dkim_public_key).decode('ascii'), **params)
+
+    def pgp_record(self, params, command, zone_name):
+        self._error('pgp records not yet supported\n')
+
+    def process_zone_file(self, zone_file_path, out_file_path):
+        if (not os.path.isfile(zone_file_path)):
+            self._error('Zone file ', zone_file_path, ' not found\n')
+
+        with open(zone_file_path, 'r') as zone_file:
+            input = zone_file.read()
+            output = ''
+            vars = {}
+            template_regex = re.compile(r'(.*?){{(.*?)}}(.*)', re.DOTALL)
+            zone_name = os.path.basename(zone_file_path)
+            soa_processed = False
+            while (input and (0 < len(input))):
+                match = template_regex.match(input)
+                if (match):
+                    output += match.group(1)
+                    command = match.group(2)
+                    input = match.group(3)
+                    self._debug('processing ', command, '\n')
+                    if (re.match(r'^[a-z]+:', command)):
+                        if ((0 == len(output)) or ('\n' == output[-1]) and ('\n' == input[0:1])):
+                            input = input[1:]
+                        record, *params = command.split(':')
+                        if ('soa' == record):
+                            output += self.soa_record(params, command, zone_name)
+                            soa_processed = True
+                        elif ('sshfp' == record):
+                            output += self.sshfp_record(params, command, zone_name)
+                        elif ('tlsa' == record):
+                            output += self.tlsa_record(params, command, zone_name)
+                        elif ('smimea' == record):
+                            output += self.smimea_record(params, command, zone_name)
+                        elif ('acme' == record):
+                            output += self.acme_record(params, command, zone_name)
+                        elif ('caa' == record):
+                            output += self.caa_record(params, command, zone_name)
+                        elif ('dkim' == record):
+                            output += self.dkim_record(params, command, zone_name)
+                        elif ('pgp' == record):
+                            output += self.pgp_record(params, command, zone_name)
+                        else:
+                            self._error('Unknown command: ', command, '\n')
+                    elif ('=' in command):
+                        if ((0 == len(output)) or ('\n' == output[-1]) and ('\n' == input[0:1])):
+                            input = input[1:]
+                            if ('\n' == input[0:1]):
+                                input = input[1:]
+                        var, value = command.split('=', 1)
+                        vars[var.strip()] = value.strip()
+                        self._debug('set: ', var, ' = ', value, '\n')
+                    elif (command in vars):
+                        output += vars[command]
+                    else:
+                        self._error('Unknown variable: ', command, '\n')
+                else:
+                    output += input
+                    break
+
+            if (not soa_processed):
+                self._error('Zone file does not contain {{soa:}}\n')
+
+            if (out_file_path):
+                out_file_path = os.path.join(out_file_path, zone_name) if (os.path.isdir(out_file_path)) else out_file_path
+                with open(out_file_path, 'w') as out_file:
+                    out_file.write(output)
+            else:
+                print(output)
+
+    def run(self):
+        self.process_zone_file(self.args.zone_file_path, self.args.out_file_path)
+
+
+
+def debug_hook(type, value, tb):
+   if hasattr(sys, 'ps1') or not sys.stderr.isatty():
+      # we are in interactive mode or we don't have a tty-like
+      # device, so we call the default hook
+      sys.__excepthook__(type, value, tb)
+   else:
+      import traceback, pdb
+      # we are NOT in interactive mode, print the exception...
+      traceback.print_exception(type, value, tb)
+      print()
+      # ...then start the debugger in post-mortem mode.
+      pdb.pm()
+
+
+if __name__ == '__main__':      # called from the command line
+    BindTool.Run()

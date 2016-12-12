@@ -1,0 +1,7 @@
+{
+	"ssh_path": "/etc/ssh",
+	"certificate_path": "/etc/ssl/certs",
+	"private_key_path": "/etc/ssl/private",
+	"acme_path": "/etc/ssl/challenges",
+	"dkim_path": "/etc/opendkim/keys"
+}
