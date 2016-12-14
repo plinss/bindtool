@@ -264,7 +264,7 @@ The following sample of a simple source zone file:
     www     AAAA    {{pool6}}::1:0
 
     ; DANE records - certificate in /etc/ssl/certs/example.com.pem
-    {{tlsa:25:smtp}}
+    {{tlsa:25:smtp:usage=dane-ee}}
     {{tlsa:443}}
     {{tlsa:443:www}}
 
@@ -298,8 +298,8 @@ Will result in the output of:
     www     AAAA    2001:db8::1:0
 
     ; DANE records - certificate in /etc/ssl/certs/example.com.pem
-    _25._tcp.smtp   TLSA    1 1 1 90cebb19a148038c14e875153311bfc27603cbc64c78c9e9432114dd76425ab4
-    _25._tcp.smtp   TLSA    1 1 2 0f5ccb1dc77b699281c671976991acd6b597f42265329921d3273a9fcf71f599e1c6c7e15da4689a239eed9dbad0fbdfc0279ddefcf93a8f40680172ea60c4e0
+    _25._tcp.smtp   TLSA    3 1 1 90cebb19a148038c14e875153311bfc27603cbc64c78c9e9432114dd76425ab4
+    _25._tcp.smtp   TLSA    3 1 2 0f5ccb1dc77b699281c671976991acd6b597f42265329921d3273a9fcf71f599e1c6c7e15da4689a239eed9dbad0fbdfc0279ddefcf93a8f40680172ea60c4e0
     _443._tcp       TLSA    1 1 1 90cebb19a148038c14e875153311bfc27603cbc64c78c9e9432114dd76425ab4
     _443._tcp       TLSA    1 1 2 0f5ccb1dc77b699281c671976991acd6b597f42265329921d3273a9fcf71f599e1c6c7e15da4689a239eed9dbad0fbdfc0279ddefcf93a8f40680172ea60c4e0
     _443._tcp.www   TLSA    1 1 1 90cebb19a148038c14e875153311bfc27603cbc64c78c9e9432114dd76425ab4

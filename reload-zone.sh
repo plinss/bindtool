@@ -23,6 +23,7 @@ then
 	rm -f /var/cache/bind/${ZONE}.jnl
 	mv /var/cache/bind/${ZONE}.out /var/cache/bind/${ZONE}
 	systemctl start bind9
+	sleep 1
 	/usr/sbin/rndc reconfig
 else
 	echo "Zone not modified"
