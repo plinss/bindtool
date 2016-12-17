@@ -22,9 +22,9 @@ Clone this repository or download the 'bindtool' file and install it on your mas
 
 Run the command:
 
-    bindtool &lt;zone-file> [&lt;output-directory-or-file>]
+    bindtool <zone-file> [<output-directory-or-file>]
 
-The tool will process the source zone file and output a zone file ready for use by the DNS server. 
+The tool will process the source zone file and output a zone file ready for use by the DNS server.
 
 It is best to keep the source zone files in a different directory than the DNS server uses for its zone files. For example, keep the source files in '/etc/bind/zones' and configure the DNS server to load the zone files from '/var/cache/bind'. When making changes to a zone, edit the file in '/etc/bind/zones', remove the server's journal file, and run the command:
 
@@ -237,7 +237,7 @@ Example:
 Becomes:
 
     @   TYPE257 \# 22 010569737375656c657473656e63727970742e6f7267
-    
+
 
 ## Sample Source Zone File
 
@@ -271,7 +271,7 @@ The following sample of a simple source zone file:
     ; DKIM - certificate in /etc/opendkim/keys/example.com/default.private
     {{dkim:}}
     _adsp._domainkey    TXT "dkim=all"
-    
+
     ; CAA Records
     {{caa:issue:letsencrypt.org}}
 
