@@ -20,7 +20,7 @@
 #       if cert_file not abs path, looks in /etc/ssl/certs
 #       proto defaults to tcp
 #       usage one of pkix-ta, pkix-ee, dane-ta, dane-ee - defaults to pkix-ee
-#       selector one of cert, spki - defaults to cert
+#       selector one of cert, spki - defaults to spki
 #   {{smimea:user[:host:cert_file:usage:selector:ttl}}
 #       if cert_file not abs path, looks in /etc/ssl/certs
 #       usage one of pkix-ta, pkix-ee, dane-ta, dane-ee - defaults to pkix-ee
@@ -60,6 +60,9 @@ class BindTool(object):
             pass
 
     def __init__(self):
+        script_dir = os.path.dirname(os.path.realpath(__file__))
+        self.script_name = os.path.basename(__file__)
+
         argparser = argparse.ArgumentParser(description = 'Preprocess bind zone files')
         argparser.add_argument('--version', action = 'version', version = '%(prog)s 0.1')
         argparser.add_argument('zone_file_path')
@@ -67,8 +70,8 @@ class BindTool(object):
         argparser.add_argument('-d', '--debug',
                                action = 'store_true', dest = 'debug', default = False,
                                help = 'print detailed debugging information to stdout')
-        argparser.add_argument('-c', '--config', 
-                               dest='config_path', default='bindtool.json', metavar='CONFIG_PATH',
+        argparser.add_argument('-c', '--config',
+                               dest='config_path', default=self.script_name+'.json', metavar='CONFIG_PATH',
                                help='Specify file path for config')
         self.args = argparser.parse_args()
         if (not self.args.zone_file_path):
@@ -77,19 +80,22 @@ class BindTool(object):
         if (self.args.debug):
             sys.excepthook = debug_hook
 
-        script_dir = os.path.dirname(os.path.realpath(__file__))
-        config_file_path = os.path.join(script_dir, self.args.config_path)
-        if (os.path.isfile(config_file_path)):
-            try:
-                with open(config_file_path) as config_file:
-                    self.config = json.load(config_file, object_pairs_hook=collections.OrderedDict)
-            except Exception as error:
-                self._error('Error reading config file: ', error, '\n')
-        else:
-            self.config = {}
+        self.config, self.config_file_path = self._load_config(self.args.config_path, ('.', os.path.join('/etc', self.script_name), script_dir))
 
         self.certificates = {}
         self.public_keys = {}
+
+    def _load_config(self, file_path, search_paths=[]):
+        search_paths = [''] if (os.path.isabs(file_path)) else search_paths
+        for search_path in search_paths:
+            config_file_path = os.path.join(search_path, file_path)
+            if (os.path.isfile(config_file_path)):
+                try:
+                    with open(config_file_path) as config_file:
+                        return (json.load(config_file, object_pairs_hook=collections.OrderedDict), os.path.abspath(config_file_path))
+                except Exception as error:
+                    self._error('Error reading config file ', config_file_path, ': ', error, '\n')
+        return (collections.OrderedDict(), None)
 
     def _message(self, *args):
         message = ''
@@ -112,7 +118,7 @@ class BindTool(object):
     def _config(self, key, default=None):
         return self.config.get(key, default)
 
-    def _parse_params(self, params, names, defaults = {}):
+    def _parse_params(self, params, names, defaults={}, prefixes={}):
         out = defaults
         while (0 < len(params)):
             param = params.pop(0)
@@ -126,6 +132,9 @@ class BindTool(object):
                 value = param
             if (value):
                 out[name] = value.strip()
+        for name in prefixes:
+            if ((name in out) and out[name]):
+                out[name] = prefixes[name] + out[name]
         return out
 
     def _generic_rr(self, type, value):
@@ -202,8 +211,9 @@ class BindTool(object):
         self._error('OpenDKIM key ', key_file_path, ' not found\n')
 
     def soa_record(self, params, command, zone_name):
-        params = self._parse_params(params, ['primary_server', 'admin', 'refresh', 'retry', 'expire', 'minimum', 'master_server', 'ttl'], 
-                                    { 'refresh': '4h', 'retry': '1h', 'expire': '14d', 'minimum': '10m', 'master_server': '', 'ttl': ''})
+        params = self._parse_params(params, ['primary_server', 'admin', 'refresh', 'retry', 'expire', 'minimum', 'master_server', 'ttl'],
+                                    {'refresh': '4h', 'retry': '1h', 'expire': '14d', 'minimum': '10m', 'master_server': '', 'ttl': ''},
+                                    {'ttl': '\t'})
         if ('primary_server' not in params):
             self._error('soa record must specify primary server {{', command, '}}\n')
         if ('admin' not in params):
@@ -213,28 +223,18 @@ class BindTool(object):
         params['admin'] = params['admin'].replace('@', '.')
         if (not params['admin'].endswith('.')):
             params['admin'] += '.'
-        if (params['ttl']):
-            params['ttl'] = '\t' + params['ttl']
 
         master_server = params['master_server'] if (params['master_server']) else params['primary_server']
         response = DNS.Request().req(server=master_server, name=zone_name, qtype='SOA')
-        today = datetime.datetime.now().strftime('%Y%m%d')
-        existing_serial = str(response.answers[0]['data'][2][1]) if (response and ('NOERROR' == response.header['status'])) else '0'
+        existing_serial = response.answers[0]['data'][2][1] if (response and ('NOERROR' == response.header['status'])) else 0
         self._debug('Found serial number ', existing_serial, '\n')
-        if (existing_serial and (existing_serial[0:8] == today)):
-            serial = today + str(int((existing_serial + '00')[8:10]) + 1).zfill(2)
-        else:
-            serial = today + '00'
-        if (int(serial) <= int(existing_serial)):   # ensure generated serial is greater than existing
-            serial = str(int(existing_serial) + 1)
+        serial = max(int(datetime.datetime.now().strftime('%Y%m%d00')), existing_serial + 1)
         self._debug('Using serial number ', serial, '\n')
 
         return '@{ttl}\tSOA\t{primary_server} {admin} {serial} {refresh} {retry} {expire} {minimum}\n'.format(serial=serial, **params)
 
     def sshfp_record(self, params, command, zone_name):
-        params = self._parse_params(params, ['host', 'key_file', 'ttl'], { 'host': '@', 'key_file': 'ssh_host', 'ttl': ''})
-        if (params['ttl']):
-            params['ttl'] = '\t' + params['ttl']
+        params = self._parse_params(params, ['host', 'key_file', 'ttl'], { 'host': '@', 'key_file': 'ssh_host', 'ttl': ''}, {'ttl': '\t'})
 
         key_file_path = os.path.join(self._config('ssh_path', '/etc/ssh'), params['key_file'])
         key_types = collections.OrderedDict([('rsa', 1), ('dsa', 2), ('ecdsa', 3), ('ed25519', 4)])
@@ -250,12 +250,13 @@ class BindTool(object):
                     output += '{host}{ttl}\tSSHFP\t{key_type} 1 {digest}\n'.format(key_type=key_types[key_type], digest=hashlib.sha1(key).hexdigest(), **params)
                     output += '{host}{ttl}\tSSHFP\t{key_type} 2 {digest}\n'.format(key_type=key_types[key_type], digest=hashlib.sha256(key).hexdigest(), **params)
         if (not found):
-            self._warn("No SSH keys found for: ", params['host'], " matching: ", key_file_path, '\n')
+            self._warn('No SSH keys found for: ', params['host'], ' matching: ', key_file_path, '\n')
         return output
 
     def tlsa_record(self, params, command, zone_name):
         params = self._parse_params(params, ['port', 'host', 'cert_file', 'usage', 'selector', 'proto', 'ttl'],
-                                    {'port': '443', 'host': '', 'cert_file': zone_name, 'usage': 'pkix-ee', 'selector': 'spki', 'proto': 'tcp', 'ttl': ''})
+                                    {'port': '443', 'host': '', 'cert_file': zone_name, 'usage': 'pkix-ee', 'selector': 'spki', 'proto': 'tcp', 'ttl': ''},
+                                    {'host': '.', 'ttl': '\t'})
         if (not params['port'].isdigit()):
             self._error('Port must be numeric for {{', command,'}}\n')
         if (params['usage'] not in ('pkix-ta', 'pkix-ee', 'dane-ta', 'dane-ee')):
@@ -264,10 +265,6 @@ class BindTool(object):
             self._error('Unknown selector ', params['selector'], ' for {{', command, '}}\n')
         if (params['proto'] not in ('tcp', 'udp', 'sctp', 'dccp')):
             self._error('Unknown protocol ', params['proto'], ' for {{', command, '}}\n')
-        if (params['host']):
-            params['host'] = '.' + params['host']
-        if (params['ttl']):
-            params['ttl'] = '\t' + params['ttl']
 
         usage = { 'pkix-ta': '0', 'pkix-ee': '1', 'dane-ta': '2', 'dane-ee': '3' }
         selector = { 'cert': '0', 'spki': '1' }
@@ -284,7 +281,8 @@ class BindTool(object):
 
     def smimea_record(self, params, command, zone_name):
         params = self._parse_params(params, ['user', 'host', 'cert_file', 'usage', 'selector', 'ttl'],
-                                    {'host': '', 'cert_file': zone_name, 'usage': 'pkix-ee', 'selector': 'cert', 'ttl': ''})
+                                    {'host': '', 'cert_file': zone_name, 'usage': 'pkix-ee', 'selector': 'cert', 'ttl': ''},
+                                    {'host': '.', 'ttl': '\t'})
         if ('user' not in params):
             self._error('smimea record must specify user {{', command, '}}\n')
         if (params['usage'] not in ('pkix-ta', 'pkix-ee', 'dane-ta', 'dane-ee')):
@@ -293,10 +291,6 @@ class BindTool(object):
             self._error('Unknown selector ', params['selector'], ' for {{', command, '}}\n')
         if ('*' != params['user']):
             params['user'] = hashlib.sha256(params['user'].encode('utf-8')).hexdigest()
-        if (params['host']):
-            params['host'] = '.' + params['host']
-        if (params['ttl']):
-            params['ttl'] = '\t' + params['ttl']
 
         usage = { 'pkix-ta': '0', 'pkix-ee': '1', 'dane-ta': '2', 'dane-ee': '3' }
         selector = { 'cert': '0', 'spki': '1' }
@@ -312,9 +306,7 @@ class BindTool(object):
         return output
 
     def acme_record(self, params, command, zone_name):
-        params = self._parse_params(params, ['challenge_file', 'ttl'], { 'challenge_file': zone_name, 'ttl': '60' })
-        if (params['ttl']):
-            params['ttl'] = '\t' + params['ttl']
+        params = self._parse_params(params, ['challenge_file', 'ttl'], { 'challenge_file': zone_name, 'ttl': '60' }, {'ttl': '\t'})
 
         output = ''
         challenge_path = os.path.join(self._config('acme_path', '/etc/ssl/challenges'), params['challenge_file'])
@@ -328,21 +320,16 @@ class BindTool(object):
         return output
 
     def caa_record(self, params, command, zone_name):
-        params = self._parse_params(params, ['tag', 'caname', 'flag', 'ttl'], { 'flag': '1', 'ttl': '' })
+        params = self._parse_params(params, ['tag', 'caname', 'flag', 'ttl'], { 'flag': '1', 'ttl': '' }, {'ttl': '\t'})
         if ('tag' not in params):
             self._error('caa record must specify tag {{', command, '}}\n')
         if ('caname' not in params):
             self._error('caa record must specify caname {{', command, '}}\n')
-        if (params['ttl']):
-            params['ttl'] = '\t' + params['ttl']
-        return '@{ttl}\t{generic}\n'.format(generic=self._generic_rr(257, chr(int(params['flag'])) + chr(len(params['tag'])) + params['tag'] + params['caname']), **params) 
+
+        return '@{ttl}\t{generic}\n'.format(generic=self._generic_rr(257, chr(int(params['flag'])) + chr(len(params['tag'])) + params['tag'] + params['caname']), **params)
 
     def dkim_record(self, params, command, zone_name):
-        params = self._parse_params(params, ['domain', 'host', 'ttl'], { 'domain': zone_name, 'host': '', 'ttl': '' })
-        if (params['host']):
-            params['host'] = '.' + params['host']
-        if (params['ttl']):
-            params['ttl'] = '\t' + params['ttl']
+        params = self._parse_params(params, ['domain', 'host', 'ttl'], { 'domain': zone_name, 'host': '', 'ttl': '' }, {'host': '.', 'ttl': '\t'})
 
         dkim_public_key = self._load_dkim_public_key(params['domain'])
         return 'default._domainkey{host}{ttl}\tTXT\t"v=DKIM1; k=rsa; p={dkim_key}"\n'.format(dkim_key=base64.b64encode(dkim_public_key).decode('ascii'), **params)
