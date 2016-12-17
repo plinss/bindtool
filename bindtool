@@ -154,17 +154,34 @@ class BindTool(object):
             output += '\t)'
         return 'TYPE' + str(type) + '\t' + output
 
-    def _load_certificate(self, cert_file_name):
-        if (cert_file_name in self.certificates):
-            return self.certificates[cert_file_name]
-        cert_file_path = os.path.join(self._config('certificate_path', '/etc/ssl/certs'), cert_file_name)
-        if (not os.path.isfile(cert_file_path)):
-            cert_file_path += '.pem'
-        if (os.path.isfile(cert_file_path)):
+    def _sha1(self, value):
+        return hashlib.sha1(value).hexdigest()
+
+    def _sha256(self, value):
+        return hashlib.sha256(value).hexdigest()
+
+    def _sha512(self, value):
+        return hashlib.sha512(value).hexdigest()
+
+    def _find_file(self, directory, file_names):
+        for file_name in file_names:
+            file_path = os.path.join(directory, file_name)
+            if (os.path.isfile(file_path)):
+                return file_path
+        return None
+
+    def _load_certificate(self, cert_file_name, username=None):
+        cert_file_path = self._find_file(self._config('certificate_path', '/etc/ssl/certs'),
+                                         ([username + '@' + cert_file_name, username + '@' + cert_file_name + '.pem'] if (username) else [])
+                                         + [cert_file_name, cert_file_name + '.pem'])
+        if (cert_file_path):
+            if (cert_file_path in self.certificates):
+                return self.certificates[cert_file_path]
+            self._debug('Loading certificate ', cert_file_path, '\n')
             certificate = subprocess.check_output(['openssl', 'x509', '-in', cert_file_path, '-outform', 'DER'])
-            self.certificates[cert_file_name] = certificate
+            self.certificates[cert_file_path] = certificate
             return certificate
-        self._error('Certificate file ', cert_file_path, ' not found\n')
+        self._error('Certificate file ', cert_file_name, ' not found\n')
 
     def _extract_public_key(self, public_key_pem):
         if (public_key_pem):
@@ -179,31 +196,35 @@ class BindTool(object):
     def _public_key_from_private_key(self, private_key_path):
         return self._extract_public_key(subprocess.check_output(['openssl', 'rsa', '-in', private_key_path, '-pubout'], stderr = subprocess.DEVNULL))
 
-    def _load_public_key(self, cert_file_name):
-        if (cert_file_name in self.public_keys):
-            return self.public_keys[cert_file_name]
+    def _load_public_key(self, cert_file_name, username=None):
         public_key = None
         backup_public_key = None
-        cert_file_path = os.path.join(self._config('certificate_path', '/etc/ssl/certs'), cert_file_name)
-        if (not os.path.isfile(cert_file_path)):
-            cert_file_path += '.pem'
-        if (os.path.isfile(cert_file_path)):
+        cert_file_path = self._find_file(self._config('certificate_path', '/etc/ssl/certs'),
+                                         ([username + '@' + cert_file_name, username + '@' + cert_file_name + '.pem'] if (username) else [])
+                                         + [cert_file_name, cert_file_name + '.pem'])
+        if (cert_file_path):
+            if (cert_file_path in self.public_keys):
+                return self.public_keys[cert_file_path]
+            self._debug('Loading public key from certificate ', cert_file_path, '\n')
             public_key = self._public_key_from_certificate(cert_file_path)
         else:
-            private_key_path = os.path.join(self._config('private_key_path', '/etc/ssl/private'), cert_file_name)
-            if (not os.path.isfile(private_key_path)):
-                private_key_path += '.key'
-            if (os.path.isfile(private_key_path)):
+            private_key_path = self._find_file(self._config('private_key_path', '/etc/ssl/private'),
+                                               ([username + '@' + cert_file_name, username + '@' + cert_file_name + '.key'] if (username) else [])
+                                               + [cert_file_name, cert_file_name + '.key'])
+            if (private_key_path):
+                self._debug('Loading public key from private key ', private_key_path, '\n')
                 public_key = self._public_key_from_private_key(private_key_path)
-        backup_private_key_path = os.path.join(self._config('private_key_path', '/etc/ssl/private'), cert_file_name + '_backup')
-        if (not os.path.isfile(backup_private_key_path)):
-            backup_private_key_path += '.key'
-        if (os.path.isfile(backup_private_key_path)):
+
+        backup_private_key_path = self._find_file(self._config('private_key_path', '/etc/ssl/private'),
+                                                  ([username + '@' + cert_file_name + '_backup', username + '@' + cert_file_name + '_backup.key'] if (username) else [])
+                                                  + [cert_file_name + '_backup', cert_file_name + '_backup.key'])
+        if (backup_private_key_path):
+            self._debug('Loading backup public key from private key ', backup_private_key_path, '\n')
             backup_public_key = self._public_key_from_private_key(backup_private_key_path)
         if (public_key):
-            self.public_keys[cert_file_name] = (public_key, backup_public_key)
+            self.public_keys[cert_file_path] = (public_key, backup_public_key)
             return (public_key, backup_public_key)
-        self._error('Certificate file ', cert_file_path, ' or private key file ', private_key_path, ' not found\n')
+        self._error('Certificate or private key file not found for ', cert_file_name, '\n')
 
     def _load_dkim_public_key(self, key_file_name):
         key_file_path = os.path.join(self._config('dkim_path', '/etc/opendkim/keys'), key_file_name, 'default.private')
@@ -251,8 +272,8 @@ class BindTool(object):
                     key_text = keyFile.read().split(' ')
                     key = base64.b64decode(key_text[1])
 
-                    output += '{host}{ttl}\tSSHFP\t{key_type} 1 {digest}\n'.format(key_type=key_types[key_type], digest=hashlib.sha1(key).hexdigest(), **params)
-                    output += '{host}{ttl}\tSSHFP\t{key_type} 2 {digest}\n'.format(key_type=key_types[key_type], digest=hashlib.sha256(key).hexdigest(), **params)
+                    output += '{host}{ttl}\tSSHFP\t{key_type} 1 {digest}\n'.format(key_type=key_types[key_type], digest=self._sha1(key), **params)
+                    output += '{host}{ttl}\tSSHFP\t{key_type} 2 {digest}\n'.format(key_type=key_types[key_type], digest=self._sha256(key), **params)
         if (not found):
             self._warn('No SSH keys found for: ', params['host'], ' matching: ', key_file_path, '\n')
         return output
@@ -276,16 +297,18 @@ class BindTool(object):
         primary, backup = (self._load_certificate(params['cert_file']), None) if ('cert' == params['selector']) else self._load_public_key(params['cert_file'])
 
         record = '_{port}._{proto}{host}{ttl}\tTLSA\t{usage_id} {selector_id} '.format(usage_id=usage[params['usage']], selector_id=selector[params['selector']], **params)
-        output = record + '1 {digest}\n'.format(digest=hashlib.sha256(primary).hexdigest())
-        output += record + '2 {digest}\n'.format(digest=hashlib.sha512(primary).hexdigest())
+        output = record + '1 {digest}\n'.format(digest=self._sha256(primary))
+        output += record + '2 {digest}\n'.format(digest=self._sha512(primary))
         if (backup):
-            output += record + '1 {digest}\n'.format(digest=hashlib.sha256(backup).hexdigest())
-            output += record + '2 {digest}\n'.format(digest=hashlib.sha512(backup).hexdigest())
+            output += record + '1 {digest}\n'.format(digest=self._sha256(backup))
+            output += record + '2 {digest}\n'.format(digest=self._sha512(backup))
         return output
 
     def _email_hash(self, localpart):
-        localpart = unicodedata.normalize('NFC', localpart)
-        return hashlib.sha256(localpart.encode('utf-8')).hexdigest()[:56]
+        if ('*' != localpart):
+            localpart = unicodedata.normalize('NFC', localpart)
+            return self._sha256(localpart.encode('utf-8'))[:56]
+        return localpart
 
     def smimea_record(self, params, command, zone_name):
         params = self._parse_params(params, ['user', 'host', 'cert_file', 'usage', 'selector', 'ttl'],
@@ -297,20 +320,19 @@ class BindTool(object):
             self._error('Unknown usage ', params['usage'], ' for {{', command, '}}\n')
         if (params['selector'] not in ('cert', 'spki')):
             self._error('Unknown selector ', params['selector'], ' for {{', command, '}}\n')
-        if ('*' != params['user']):
-            params['user'] = self._email_hash(params['user'])
 
+        userhash = self._email_hash(params['user'])
         usage = { 'pkix-ta': '0', 'pkix-ee': '1', 'dane-ta': '2', 'dane-ee': '3' }
         selector = { 'cert': '0', 'spki': '1' }
 
-        primary, backup = (self._load_certificate(params['cert_file']), None) if ('cert' == params['selector']) else self._load_public_key(params['cert_file'])
+        primary, backup = (self._load_certificate(params['cert_file'], params['user']), None) if ('cert' == params['selector']) else self._load_public_key(params['cert_file'], params['user'])
 
-        record = '{user}._smimecert{host}{ttl}\tSMIMEA\t{usage_id} {selector_id} '.format(usage_id=usage[params['usage']], selector_id=selector[params['selector']], **params)
-        output = record + '1 {digest}\n'.format(digest=hashlib.sha256(primary).hexdigest())
-        output += record + '2 {digest}\n'.format(digest=hashlib.sha512(primary).hexdigest())
+        record = '{userhash}._smimecert{host}{ttl}\tSMIMEA\t{usage_id} {selector_id} '.format(userhash=userhash, usage_id=usage[params['usage']], selector_id=selector[params['selector']], **params)
+        output = record + '1 {digest}\n'.format(digest=self._sha256(primary))
+        output += record + '2 {digest}\n'.format(digest=self._sha512(primary))
         if (backup):
-            output += record + '1 {digest}\n'.format(digest=hashlib.sha256(backup).hexdigest())
-            output += record + '2 {digest}\n'.format(digest=hashlib.sha512(backup).hexdigest())
+            output += record + '1 {digest}\n'.format(digest=self._sha256(backup))
+            output += record + '2 {digest}\n'.format(digest=self._sha512(backup))
         return output
 
     def acme_record(self, params, command, zone_name):

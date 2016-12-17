@@ -82,7 +82,7 @@ SOA records are specified as follows:
 The 'primary_server' and 'admin' arguments are required, all others are optional.
 Note that the serial number for the zone is not specified, the tool automatically generates the serial number using the format YYYYMMDD## and ensures that the generated serial number is at least one greater than the currently deployed serial number of the zone.
 
-* 'primary_server' is the name of the primary name server for the domain.
+* 'primary_server' is the name of the primary name server for the zone.
 * 'admin' is the email address of the zone administrator.
 It may be specified in bind format or standard email format, e.g.: 'admin.example.com' or 'admin@example.com'.
 * 'refresh' is the time when the slave server(s) will refresh from the master.
@@ -94,6 +94,7 @@ The default value is '14d'.
 * 'minimum' is the default time the slaves should cache the zone file.
 The default value is '10m'.
 * 'master_server' is a server to query for existing SOA serial numbers other than the 'primary_server'.
+The default value is the name of the primary server for the zone.
 This is useful if the master server is not publicly accessible and therefore is not the same as the 'primary_server'.
 If the 'primary_server' is not the master, be sure to set this value so that slave zone transfers happen properly after updates.
 * 'ttl' is the TTL value for the SOA record.
@@ -192,6 +193,7 @@ The 'user' argument is required, all others are optional.
 The default value is '@'.
 * 'cert_file' is the file name of the certificate or private key used for S/MIME email for the user.
 The default value is the name of the source zone file.
+The tool will first search for a certificate or private key file with the 'user' argument + '@' prepended to the file name, e.g. {{smimea:user}} will search for 'user@example.com', then 'example.com'.
 For certificate files the '.pem' file extension is optional, for private key files the '.key' file extension is optional.
 If an absolute path is not specified, the path for certificate files will be relative to '/etc/ssl/certs' and the path for private key files will be realtive to '/etc/ssl/private' (may be changed in the config file).
 * 'usage' is one of the following: 'pkix-ta', 'pkix-ee', 'dane-ta', or 'dane-ee'.
