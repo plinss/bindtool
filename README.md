@@ -2,12 +2,15 @@
 
 Preprocessor for bind9 zone files.
 
-This tool is useful for managing zone files for a bind9 DNS server. It provides basic variable substitutions and automatic generation of several kinds of DNS records, in particular, those based on external resources, like public keys. This greatly simplifies keeping DNS zones current when keys change as no zone files need to be edited.
+This tool is useful for managing zone files for a bind9 DNS server.
+It provides basic variable substitutions and automatic generation of several kinds of DNS records, in particular, those based on external resources, like public keys.
+This greatly simplifies keeping DNS zones current when keys change as no zone files need to be edited.
 
 
 ## Installation
 
-Requires Python3.4+ and the py3dns package. py3dns can be installed via:
+Requires Python3.4+ and the py3dns package.
+py3dns can be installed via:
 
     pip install py3dns
 
@@ -15,7 +18,8 @@ or if you have both Python2 and Python3 installed:
 
     pip3 install py3dns
 
-Clone this repository or download the 'bindtool' file and install it on your master DNS server. Optionally copy the 'bindtool.example.json' file to 'bindtool.json' in the installed directory and edit the configuration options.
+Clone this repository or download the 'bindtool' file and install it on your master DNS server.
+Optionally copy the 'bindtool.example.json' file to 'bindtool.json' in the installed directory and edit the configuration options.
 
 
 ## Usage
@@ -26,7 +30,9 @@ Run the command:
 
 The tool will process the source zone file and output a zone file ready for use by the DNS server.
 
-It is best to keep the source zone files in a different directory than the DNS server uses for its zone files. For example, keep the source files in '/etc/bind/zones' and configure the DNS server to load the zone files from '/var/cache/bind'. When making changes to a zone, edit the file in '/etc/bind/zones', remove the server's journal file, and run the command:
+It is best to keep the source zone files in a different directory than the DNS server uses for its zone files.
+For example, keep the source files in '/etc/bind/zones' and configure the DNS server to load the zone files from '/var/cache/bind'.
+When making changes to a zone, edit the file in '/etc/bind/zones', remove the server's journal file, and run the command:
 
     bindtool /etc/bind/zones/myzone.com /var/cache/bind
 
@@ -57,11 +63,13 @@ becomes:
 
 ## Record Generation
 
-The tool can also automatically generate the several kinds of resource records. The format for these records is:
+The tool can also automatically generate the several kinds of resource records.
+The format for these records is:
 
     {{type:arg1:arg2:arg3}}
 
-Optional arguments my be omitted, however if all arguments are omitted, at least one colon must follow the record type to distinguish it from a variable. Arguments may also be specified by name in order to skip optional arguments, e.g.:
+Optional arguments my be omitted, however if all arguments are omitted, at least one colon must follow the record type to distinguish it from a variable.
+Arguments may also be specified by name in order to skip optional arguments, e.g.:
     {{tlsa:443:ttl=300}}
 
 
@@ -71,16 +79,25 @@ SOA records are specified as follows:
 
     {{soa:primary_server:admin:refresh:retry:expire:minimum:master_server:ttl}}
 
-The 'primary_server' and 'admin' arguments are required, all others are optional. Note that the serial number for the zone is not specified, the tool automatically generates the serial number using the format YYYYMMDD## and ensures that the generated serial number is at least one greater than the currently deployed serial number of the zone.
+The 'primary_server' and 'admin' arguments are required, all others are optional.
+Note that the serial number for the zone is not specified, the tool automatically generates the serial number using the format YYYYMMDD## and ensures that the generated serial number is at least one greater than the currently deployed serial number of the zone.
 
 * 'primary_server' is the name of the primary name server for the domain.
-* 'admin' is the email address of the zone administrator. It may be specified in bind format or standard email format, e.g.: 'admin.example.com' or 'admin@example.com'.
-* 'refresh' is the time when the slave server(s) will refresh from the master. The default value is '4h'.
-* 'retry' is retry interval for slaves to refresh from the master in case of failure. The default value is '1h'.
-* 'expire' is the duration the slave will keep a zone file without a refresh from the master. The default value is '14d'.
-* 'minimum' is the default time the slaves should cache the zone file. The default value is '10m'.
-* 'master_server' is a server to query for existing SOA serial numbers other than the 'primary_server'. This is useful if the master server is not publicly accessible and therefore is not the same as the 'primary_server'. If the 'primary_server' is not the master, be sure to set this value so that slave zone transfers happen properly after updates.
-* 'ttl' is the TTL value for the SOA record. The default value is empty.
+* 'admin' is the email address of the zone administrator.
+It may be specified in bind format or standard email format, e.g.: 'admin.example.com' or 'admin@example.com'.
+* 'refresh' is the time when the slave server(s) will refresh from the master.
+The default value is '4h'.
+* 'retry' is retry interval for slaves to refresh from the master in case of failure.
+The default value is '1h'.
+* 'expire' is the duration the slave will keep a zone file without a refresh from the master
+The default value is '14d'.
+* 'minimum' is the default time the slaves should cache the zone file.
+The default value is '10m'.
+* 'master_server' is a server to query for existing SOA serial numbers other than the 'primary_server'.
+This is useful if the master server is not publicly accessible and therefore is not the same as the 'primary_server'.
+If the 'primary_server' is not the master, be sure to set this value so that slave zone transfers happen properly after updates.
+* 'ttl' is the TTL value for the SOA record.
+The default value is empty.
 
 Example:
 
@@ -99,11 +116,17 @@ SSHFP records are specified as follows:
 
 All arguments are optional.
 
-* 'hostname' is the host name for the SSHFP record. The default value is '@'.
-* 'key_file' is the name of the file the SSH host key files. The default value is 'ssh_host', note that key file names do not include the key type or file extension. If an absolute path is not specified, the path will be relative to '/etc/ssh' (may be changed in the config file).
-* 'ttl' is the TTL value for the SSHFP record. The default value is empty.
+* 'hostname' is the host name for the SSHFP record.
+The default value is '@'.
+* 'key_file' is the name of the file the SSH host key files.
+The default value is 'ssh_host', note that key file names do not include the key type or file extension.
+If an absolute path is not specified, the path will be relative to '/etc/ssh' (may be changed in the config file).
+* 'ttl' is the TTL value for the SSHFP record.
+The default value is empty.
 
-The following key types are recognized: 'rsa', 'dsa', 'ecdsa', and 'ed25519'. Two SSHFP records will be generated for each key file that is present, one with a SHA1 digest and one with a SHA256 digest. Note that the expected key files must be named: '&lt;key_file>_&lt;key_type>_key.pub', e.g.: 'ssh_host_ecdsa_key.pub'
+The following key types are recognized: 'rsa', 'dsa', 'ecdsa', and 'ed25519'.
+Two SSHFP records will be generated for each key file that is present, one with a SHA1 digest and one with a SHA256 digest.
+Note that the expected key files must be named: '&lt;key_file>_&lt;key_type>_key.pub', e.g.: 'ssh_host_ecdsa_key.pub'
 
 Example:
 
@@ -126,15 +149,25 @@ TLSA records are specified as follows:
 The 'port' argument is required, all others are optional.
 
 * 'port' is the TCP port for the service.
-* 'host' is the host name for the service. The default value is '@'.
-* 'cert_file' is the file name of the certificate or private key used to secure the service. The default value is the name of the source zone file. For certificate files the '.pem' file extension is optional, for private key files the '.key' file extension is optional. If an absolute path is not specified, the path for certificate files will be relative to '/etc/ssl/certs' and the path for private key files will be realtive to '/etc/ssl/private' (may be changed in the config file).
-* 'usage' is one of the following: 'pkix-ta', 'pkix-ee', 'dane-ta', or 'dane-ee'. The default value is 'pkix-ee'.
-* 'selector' is 'cert', or 'spki'. For 'cert' selectors the 'cert_file' must be a certificate, for 'spki' selectors the 'cert_file' must be a private key. The default value is 'spki'.
-* 'proto' is one of the following: 'tcp', 'udp', 'sctp', or 'dccp'. The default value is 'tcp'.
-* 'ttl' is the TTL value for the TLSA record. The default value is empty.
+* 'host' is the host name for the service.
+The default value is '@'.
+* 'cert_file' is the file name of the certificate or private key used to secure the service.
+The default value is the name of the source zone file.
+For certificate files the '.pem' file extension is optional, for private key files the '.key' file extension is optional.
+If an absolute path is not specified, the path for certificate files will be relative to '/etc/ssl/certs' and the path for private key files will be realtive to '/etc/ssl/private' (may be changed in the config file).
+* 'usage' is one of the following: 'pkix-ta', 'pkix-ee', 'dane-ta', or 'dane-ee'.
+The default value is 'pkix-ee'.
+* 'selector' is 'cert', or 'spki'.
+For 'cert' selectors the 'cert_file' must be a certificate, for 'spki' selectors the 'cert_file' must be a private key.
+The default value is 'spki'.
+* 'proto' is one of the following: 'tcp', 'udp', 'sctp', or 'dccp'.
+The default value is 'tcp'.
+* 'ttl' is the TTL value for the TLSA record.
+The default value is empty.
 
 Two TLSA records will be generated, one using a SHA256 digest and one using a SHA512 digest.
-When using the 'spki' selector, the tool will additionally look for a backup key file using the file name of the 'cert_file' + '_backup' (before the file extension, e.g. 'example.com_backup.key'). If a backup key is found, an additional two TLSA records will be generated for the backup key.
+When using the 'spki' selector, the tool will additionally look for a backup key file using the file name of the 'cert_file' + '_backup' (before the file extension, e.g. 'example.com_backup.key').
+If a backup key is found, an additional two TLSA records will be generated for the backup key.
 
 Example:
 
@@ -155,14 +188,23 @@ SMIMEA records are specified as follows:
 The 'user' argument is required, all others are optional.
 
 * 'user' is the left hand side of the user's email address (before the '@') or '*'.
-* 'host' is the host name for the email address. The default value is '@'.
-* 'cert_file' is the file name of the certificate or private key used for S/MIME email for the user. The default value is the name of the source zone file. For certificate files the '.pem' file extension is optional, for private key files the '.key' file extension is optional. If an absolute path is not specified, the path for certificate files will be relative to '/etc/ssl/certs' and the path for private key files will be realtive to '/etc/ssl/private' (may be changed in the config file).
-* 'usage' is one of the following: 'pkix-ta', 'pkix-ee', 'dane-ta', or 'dane-ee'. The default value is 'pkix-ee'.
-* 'selector' is 'cert', or 'spki'. For 'cert' selectors the 'cert_file' must be a certificate, for 'spki' selectors the 'cert_file' must be a private key. The default value is 'cert'.
-* 'ttl' is the TTL value for the SMIMEA record. The default value is empty.
+* 'host' is the host name for the email address.
+The default value is '@'.
+* 'cert_file' is the file name of the certificate or private key used for S/MIME email for the user.
+The default value is the name of the source zone file.
+For certificate files the '.pem' file extension is optional, for private key files the '.key' file extension is optional.
+If an absolute path is not specified, the path for certificate files will be relative to '/etc/ssl/certs' and the path for private key files will be realtive to '/etc/ssl/private' (may be changed in the config file).
+* 'usage' is one of the following: 'pkix-ta', 'pkix-ee', 'dane-ta', or 'dane-ee'.
+The default value is 'pkix-ee'.
+* 'selector' is 'cert', or 'spki'.
+For 'cert' selectors the 'cert_file' must be a certificate, for 'spki' selectors the 'cert_file' must be a private key.
+The default value is 'cert'.
+* 'ttl' is the TTL value for the SMIMEA record.
+The default value is empty.
 
 Two SMIMEA records will be generated, one using a SHA256 digest and one using a SHA512 digest.
-When using the 'spki' selector, the tool will additionally look for a backup key file using the file name of the 'cert_file' + '_backup' (before the file extension, e.g. 'example.com_backup.key'). If a backup key is found, an additional two SMIMEA records will be generated for the backup key.
+When using the 'spki' selector, the tool will additionally look for a backup key file using the file name of the 'cert_file' + '_backup' (before the file extension, e.g. 'example.com_backup.key').
+If a backup key is found, an additional two SMIMEA records will be generated for the backup key.
 
 Example:
 
@@ -182,10 +224,16 @@ ACME Challenge (TXT) records are specified as follows:
 
 All arguments are optional.
 
-* 'challenge_file' is the file name of the json file storing ACME challenge information. The default value is the name of the source zone file. If an absolute path is not specified, the path will be relative to '/etc/ssl/challenges' (may be changed in the config file).
-* 'ttl' is the TTL value for the TXT record. The default value is empty.
+* 'challenge_file' is the file name of the json file storing ACME challenge information.
+The default value is the name of the source zone file.
+If an absolute path is not specified, the path will be relative to '/etc/ssl/challenges' (may be changed in the config file).
+* 'ttl' is the TTL value for the TXT record.
+The default value is empty.
 
-The contents of the ACME challenge file is a single dictionary whose keys are host names and values are the ACME challenge values. One record will be generated for each key/value pair. This record type is meant to be used with an automatic ACME certificate managment bot doing dns-01 authorizations. If the challenge file does not exist, no records will be generated and no error will occour.
+The contents of the ACME challenge file is a single dictionary whose keys are host names and values are the ACME challenge values.
+One record will be generated for each key/value pair.
+This record type is meant to be used with an automatic ACME certificate managment bot doing dns-01 authorizations.
+If the challenge file does not exist, no records will be generated and no error will occour.
 
 Example:
 
@@ -204,9 +252,12 @@ DKIM (TXT) records are specified as follows:
 
 All arguments are optional.
 
-* 'domain' is the name of the OpenDKIM private key. If an absolute path is not specified, the key will be in a path relative to '/etc/opendkim/keys' (may be changed in the config file) and in a file named 'default.private', e.g. '/etc/opendkim/&lt;domain>/default.private'.
-* 'host' is the host name for the DKIM key. The default value is '@'
-* 'ttl' is the TTL value for the TXT record. The default value is empty.
+* 'domain' is the name of the OpenDKIM private key.
+If an absolute path is not specified, the key will be in a path relative to '/etc/opendkim/keys' (may be changed in the config file) and in a file named 'default.private', e.g. '/etc/opendkim/&lt;domain>/default.private'.
+* 'host' is the host name for the DKIM key.
+The default value is '@'
+* 'ttl' is the TTL value for the TXT record.
+The default value is empty.
 
 Example:
 
@@ -227,8 +278,10 @@ The 'tag' and 'caname' arguments are required, all others are optional.
 
 * 'tag' is tag for the CAA record, usually 'issue' or 'issuewild'.
 * 'caname' is the name of the CA.
-* 'flag' is flag value for the CAA record. The default value is '1'.
-* 'ttl' is the TTL value for the CAA record. The default value is empty.
+* 'flag' is flag value for the CAA record.
+The default value is '1'.
+* 'ttl' is the TTL value for the CAA record.
+The default value is empty.
 
 Example:
 
