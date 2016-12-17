@@ -38,6 +38,7 @@ import argparse
 import re
 import datetime
 import collections
+import unicodedata
 import base64
 import hashlib
 import json
@@ -279,6 +280,10 @@ class BindTool(object):
             output += record + '2 {digest}\n'.format(digest=hashlib.sha512(backup).hexdigest())
         return output
 
+    def _email_hash(self, localpart):
+        localpart = unicodedata.normalize('NFC', localpart)
+        return hashlib.sha256(localpart.encode('utf-8')).hexdigest()[:56]
+
     def smimea_record(self, params, command, zone_name):
         params = self._parse_params(params, ['user', 'host', 'cert_file', 'usage', 'selector', 'ttl'],
                                     {'host': '', 'cert_file': zone_name, 'usage': 'pkix-ee', 'selector': 'cert', 'ttl': ''},
@@ -290,7 +295,7 @@ class BindTool(object):
         if (params['selector'] not in ('cert', 'spki')):
             self._error('Unknown selector ', params['selector'], ' for {{', command, '}}\n')
         if ('*' != params['user']):
-            params['user'] = hashlib.sha256(params['user'].encode('utf-8')).hexdigest()
+            params['user'] = self._email_hash(params['user'])
 
         usage = { 'pkix-ta': '0', 'pkix-ee': '1', 'dane-ta': '2', 'dane-ee': '3' }
         selector = { 'cert': '0', 'spki': '1' }
