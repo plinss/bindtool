@@ -181,7 +181,8 @@ class BindTool(object):
             certificate = subprocess.check_output(['openssl', 'x509', '-in', cert_file_path, '-outform', 'DER'])
             self.certificates[cert_file_path] = certificate
             return certificate
-        self._error('Certificate file ', cert_file_name, ' not found\n')
+        self._warn('Certificate file ', cert_file_name, ' not found\n')
+        return None
 
     def _extract_public_key(self, public_key_pem):
         if (public_key_pem):
@@ -224,13 +225,14 @@ class BindTool(object):
         if (public_key):
             self.public_keys[cert_file_path] = (public_key, backup_public_key)
             return (public_key, backup_public_key)
-        self._error('Certificate or private key file not found for ', cert_file_name, '\n')
+        self._warn('Certificate or private key file not found for ', cert_file_name, '\n')
+        return (None, None)
 
     def _load_dkim_public_key(self, key_file_name):
         key_file_path = os.path.join(self._config('dkim_path', '/etc/opendkim/keys'), key_file_name, 'default.private')
         if (os.path.isfile(key_file_path)):
             return subprocess.check_output(['openssl', 'rsa', '-in', key_file_path,  '-outform', 'DER', '-pubout'], stderr = subprocess.DEVNULL)
-        self._error('OpenDKIM key ', key_file_path, ' not found\n')
+        self._warn('OpenDKIM key ', key_file_path, ' not found\n')
 
     def soa_record(self, params, command, zone_name):
         params = self._parse_params(params, ['primary_server', 'admin', 'refresh', 'retry', 'expire', 'minimum', 'master_server', 'ttl'],
@@ -295,6 +297,8 @@ class BindTool(object):
         selector = { 'cert': '0', 'spki': '1' }
 
         primary, backup = (self._load_certificate(params['cert_file']), None) if ('cert' == params['selector']) else self._load_public_key(params['cert_file'])
+        if (not primary):
+            return ''
 
         record = '_{port}._{proto}{host}{ttl}\tTLSA\t{usage_id} {selector_id} '.format(usage_id=usage[params['usage']], selector_id=selector[params['selector']], **params)
         output = record + '1 {digest}\n'.format(digest=self._sha256(primary))
@@ -326,6 +330,8 @@ class BindTool(object):
         selector = { 'cert': '0', 'spki': '1' }
 
         primary, backup = (self._load_certificate(params['cert_file'], params['user']), None) if ('cert' == params['selector']) else self._load_public_key(params['cert_file'], params['user'])
+        if (not primary):
+            return ''
 
         record = '{userhash}._smimecert{host}{ttl}\tSMIMEA\t{usage_id} {selector_id} '.format(userhash=userhash, usage_id=usage[params['usage']], selector_id=selector[params['selector']], **params)
         output = record + '1 {digest}\n'.format(digest=self._sha256(primary))
@@ -362,7 +368,9 @@ class BindTool(object):
         params = self._parse_params(params, ['domain', 'host', 'ttl'], { 'domain': zone_name, 'host': '', 'ttl': '' }, {'host': '.', 'ttl': '\t'})
 
         dkim_public_key = self._load_dkim_public_key(params['domain'])
-        return 'default._domainkey{host}{ttl}\tTXT\t"v=DKIM1; k=rsa; p={dkim_key}"\n'.format(dkim_key=base64.b64encode(dkim_public_key).decode('ascii'), **params)
+        if (dkim_public_key):
+            return 'default._domainkey{host}{ttl}\tTXT\t"v=DKIM1; k=rsa; p={dkim_key}"\n'.format(dkim_key=base64.b64encode(dkim_public_key).decode('ascii'), **params)
+        return ''
 
     def pgp_record(self, params, command, zone_name):
         self._error('pgp records not yet supported\n')
