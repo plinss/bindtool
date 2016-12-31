@@ -82,6 +82,13 @@ class BindTool(object):
             sys.excepthook = debug_hook
 
         self.config, self.config_file_path = self._load_config(self.args.config_path, ('.', os.path.join('/etc', self.script_name), script_dir))
+        self._config_defaults = {
+            'certificate_path': '/etc/ssl/certs',
+            'private_key_path': '/etc/ssl/private',
+            'dkim_path': '/etc/opendkim/keys',
+            'ssh_path': '/etc/ssh',
+            'acme_path': '/etc/ssl/challenges'
+        }
 
         self.certificates = {}
         self.public_keys = {}
@@ -116,8 +123,8 @@ class BindTool(object):
         sys.stderr.write('ERROR: ' + message)
         raise BindToolError(message)
 
-    def _config(self, key, default=None):
-        return self.config.get(key, default)
+    def _config(self, key):
+        return self.config.get(key, self._config_defaults.get(key))
 
     def _parse_params(self, params, names, defaults={}, prefixes={}):
         out = defaults
@@ -171,7 +178,7 @@ class BindTool(object):
         return None
 
     def _load_certificate(self, cert_file_name, username=None):
-        cert_file_path = self._find_file(self._config('certificate_path', '/etc/ssl/certs'),
+        cert_file_path = self._find_file(self._config('certificate_path'),
                                          ([username + '@' + cert_file_name, username + '@' + cert_file_name + '.pem'] if (username) else [])
                                          + [cert_file_name, cert_file_name + '.pem'])
         if (cert_file_path):
@@ -200,7 +207,7 @@ class BindTool(object):
     def _load_public_key(self, cert_file_name, username=None):
         public_key = None
         backup_public_key = None
-        cert_file_path = self._find_file(self._config('certificate_path', '/etc/ssl/certs'),
+        cert_file_path = self._find_file(self._config('certificate_path'),
                                          ([username + '@' + cert_file_name, username + '@' + cert_file_name + '.pem'] if (username) else [])
                                          + [cert_file_name, cert_file_name + '.pem'])
         if (cert_file_path):
@@ -209,14 +216,14 @@ class BindTool(object):
             self._debug('Loading public key from certificate ', cert_file_path, '\n')
             public_key = self._public_key_from_certificate(cert_file_path)
         else:
-            private_key_path = self._find_file(self._config('private_key_path', '/etc/ssl/private'),
+            private_key_path = self._find_file(self._config('private_key_path'),
                                                ([username + '@' + cert_file_name, username + '@' + cert_file_name + '.key'] if (username) else [])
                                                + [cert_file_name, cert_file_name + '.key'])
             if (private_key_path):
                 self._debug('Loading public key from private key ', private_key_path, '\n')
                 public_key = self._public_key_from_private_key(private_key_path)
 
-        backup_private_key_path = self._find_file(self._config('private_key_path', '/etc/ssl/private'),
+        backup_private_key_path = self._find_file(self._config('private_key_path'),
                                                   ([username + '@' + cert_file_name + '_backup', username + '@' + cert_file_name + '_backup.key'] if (username) else [])
                                                   + [cert_file_name + '_backup', cert_file_name + '_backup.key'])
         if (backup_private_key_path):
@@ -229,7 +236,7 @@ class BindTool(object):
         return (None, None)
 
     def _load_dkim_public_key(self, key_file_name):
-        key_file_path = os.path.join(self._config('dkim_path', '/etc/opendkim/keys'), key_file_name, 'default.private')
+        key_file_path = os.path.join(self._config('dkim_path'), key_file_name, 'default.private')
         if (os.path.isfile(key_file_path)):
             return subprocess.check_output(['openssl', 'rsa', '-in', key_file_path,  '-outform', 'DER', '-pubout'], stderr = subprocess.DEVNULL)
         self._warn('OpenDKIM key ', key_file_path, ' not found\n')
@@ -263,7 +270,7 @@ class BindTool(object):
     def sshfp_record(self, params, command, zone_name):
         params = self._parse_params(params, ['host', 'key_file', 'ttl'], { 'host': '@', 'key_file': 'ssh_host', 'ttl': ''}, {'ttl': '\t'})
 
-        key_file_path = os.path.join(self._config('ssh_path', '/etc/ssh'), params['key_file'])
+        key_file_path = os.path.join(self._config('ssh_path'), params['key_file'])
         key_types = collections.OrderedDict([('rsa', 1), ('dsa', 2), ('ecdsa', 3), ('ed25519', 4)])
         found = False
         output = ''
@@ -345,7 +352,7 @@ class BindTool(object):
         params = self._parse_params(params, ['challenge_file', 'ttl'], { 'challenge_file': zone_name, 'ttl': '60' }, {'ttl': '\t'})
 
         output = ''
-        challenge_path = os.path.join(self._config('acme_path', '/etc/ssl/challenges'), params['challenge_file'])
+        challenge_path = os.path.join(self._config('acme_path'), params['challenge_file'])
         if (os.path.isfile(challenge_path)):
             with open(challenge_path) as challenge_file:
                 challenges = json.load(challenge_file, object_pairs_hook=collections.OrderedDict)
