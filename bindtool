@@ -43,6 +43,7 @@ import base64
 import hashlib
 import json
 import subprocess
+import binascii
 
 import DNS
 
@@ -145,21 +146,20 @@ class BindTool(object):
                 out[name] = prefixes[name] + out[name]
         return out
 
+    def _wrap(self, value, length=80):
+        if (len(value) <= length):
+            return value
+        output = '(\n'
+        while (0 < len(value)):
+            output += '\t\t' + value[0:length] + '\n'
+            value = value[length:]
+        output += '\t)'
+        return output
+
     def _generic_rr(self, type, value):
         value = value.encode('ascii')
-        output = r'\# ' + str(len(value)) + ' '
-        data = ''
-        for ch in value:
-            data += ('00' + hex(ch)[2:])[-2:]
-        if (len(data) < 61):
-            output += data
-        else:
-            output += '(\n'
-            while (0 < len(data)):
-                output += '\t\t' + data[0:60] + '\n'
-                data = data[60:]
-            output += '\t)'
-        return 'TYPE' + str(type) + '\t' + output
+        data = binascii.hexlify(value).decode('ascii')
+        return 'TYPE{type}\t\\# {len} {data}'.format(type=type, len=len(value), data=self._wrap(data))
 
     def _sha1(self, value):
         return hashlib.sha1(value).hexdigest()
@@ -341,7 +341,8 @@ class BindTool(object):
             return ''
 
         record = '{userhash}._smimecert{host}{ttl}\tSMIMEA\t{usage_id} {selector_id} '.format(userhash=userhash, usage_id=usage[params['usage']], selector_id=selector[params['selector']], **params)
-        output = record + '1 {digest}\n'.format(digest=self._sha256(primary))
+        output = record + '0 {cert}\n'.format(cert=self._wrap(binascii.hexlify(primary).decode('ascii'), 120)) if ('cert' == params['selector']) else ''
+        output += record + '1 {digest}\n'.format(digest=self._sha256(primary))
         output += record + '2 {digest}\n'.format(digest=self._sha512(primary))
         if (backup):
             output += record + '1 {digest}\n'.format(digest=self._sha256(backup))

@@ -205,6 +205,7 @@ The default value is 'cert'.
 The default value is empty.
 
 Two SMIMEA records will be generated, one using a SHA256 digest and one using a SHA512 digest.
+For 'cert' selectors an additional record will be generated with the full contents of the certificate.
 When using the 'spki' selector, the tool will additionally look for a backup key file using the file name of the 'cert_file' + '_backup' (before the file extension, e.g. 'example.com_backup.key').
 If a backup key is found, an additional two SMIMEA records will be generated for the backup key.
 
