@@ -16,12 +16,12 @@
 #   {{sshfp:[hostname:key_file:ttl]}}
 #       key_file defaults to 'ssh_host', if not abs path, looks in /etc/ssh
 #       key_file must not include _<type>_key.pub
-#   {{tlsa:port[:host:cert_file:usage:selector:proto:ttl]}
+#   {{tlsa:port[:host:cert_file:usage:selector:proto:ttl:type]}
 #       if cert_file not abs path, looks in /etc/ssl/certs
 #       proto defaults to tcp
 #       usage one of pkix-ta, pkix-ee, dane-ta, dane-ee - defaults to pkix-ee
 #       selector one of cert, spki - defaults to spki
-#   {{smimea:user[:host:cert_file:usage:selector:ttl}}
+#   {{smimea:user[:host:cert_file:usage:selector:ttl:type}}
 #       if cert_file not abs path, looks in /etc/ssl/certs
 #       usage one of pkix-ta, pkix-ee, dane-ta, dane-ee - defaults to pkix-ee
 #       selector one of cert, spki - defaults to cert
@@ -66,7 +66,7 @@ class BindTool(object):
         self.script_name = os.path.basename(__file__)
 
         argparser = argparse.ArgumentParser(description = 'Preprocess bind zone files')
-        argparser.add_argument('--version', action = 'version', version = '%(prog)s 0.1')
+        argparser.add_argument('--version', action = 'version', version = '%(prog)s 0.2')
         argparser.add_argument('zone_file_path')
         argparser.add_argument('out_file_path', nargs = '?')
         argparser.add_argument('-d', '--debug',
@@ -89,6 +89,16 @@ class BindTool(object):
             'dkim_path': '/etc/opendkim/keys',
             'ssh_path': '/etc/ssh',
             'acme_path': '/etc/ssl/challenges'
+        }
+        self._cert_suffixes = {
+            '': ('', '.rsa', '.ecdsa'),
+            'rsa': ('', '.rsa'),
+            'ecdsa': ('.ecdsa')
+        }
+        self._key_suffixes = {
+            '': ('', '.rsa', '.ecdsa', '_backup', '_backup.rsa', '_backup.ecdsa'),
+            'rsa': ('', '.rsa', '_backup', '_backup.rsa'),
+            'ecdsa': ('.ecdsa', '_backup.ecdsa')
         }
 
         self.certificates = {}
@@ -158,8 +168,10 @@ class BindTool(object):
 
     def _generic_rr(self, type, value):
         value = value.encode('ascii')
-        data = binascii.hexlify(value).decode('ascii')
-        return 'TYPE{type}\t\\# {len} {data}'.format(type=type, len=len(value), data=self._wrap(data))
+        return 'TYPE{type}\t\\# {len} {data}'.format(type=type, len=len(value), data=self._wrap(self._hex(value)))
+
+    def _hex(self, value):
+        return binascii.hexlify(value).decode('ascii')
 
     def _sha1(self, value):
         return hashlib.sha1(value).hexdigest()
@@ -177,19 +189,23 @@ class BindTool(object):
                 return file_path
         return None
 
-    def _load_certificate(self, cert_file_name, username=None):
-        cert_file_path = self._find_file(self._config('certificate_path'),
-                                         ([username + '@' + cert_file_name, username + '@' + cert_file_name + '.pem'] if (username) else [])
-                                         + [cert_file_name, cert_file_name + '.pem'])
-        if (cert_file_path):
-            if (cert_file_path in self.certificates):
-                return self.certificates[cert_file_path]
-            self._debug('Loading certificate ', cert_file_path, '\n')
-            certificate = subprocess.check_output(['openssl', 'x509', '-in', cert_file_path, '-outform', 'DER'])
-            self.certificates[cert_file_path] = certificate
-            return certificate
-        self._warn('Certificate file ', cert_file_name, ' not found\n')
-        return None
+    def _load_certificates(self, cert_file_name, type, username=None):
+        certificates = []
+        for suffix in self._cert_suffixes[type]:
+            cert_file_path = self._find_file(self._config('certificate_path'),
+                                             ([username + '@' + cert_file_name + suffix, username + '@' + cert_file_name + suffix + '.pem'] if (username) else [])
+                                             + [cert_file_name + suffix, cert_file_name + suffix + '.pem'])
+            if (cert_file_path):
+                if (cert_file_path in self.certificates):
+                    certificates.append(self.certificates[cert_file_path])
+                else:
+                    self._debug('Loading certificate ', cert_file_path, '\n')
+                    certificate = subprocess.check_output(['openssl', 'x509', '-in', cert_file_path, '-outform', 'DER'])
+                    self.certificates[cert_file_path] = certificate
+                    certificates.append(certificate)
+        if (not certificates):
+            self._warn('Certificate file ', cert_file_name, ' not found\n')
+        return certificates
 
     def _extract_public_key(self, public_key_pem):
         if (public_key_pem):
@@ -202,38 +218,40 @@ class BindTool(object):
         return self._extract_public_key(subprocess.check_output(['openssl', 'x509', '-in', cert_file_path, '-pubkey', '-noout']))
 
     def _public_key_from_private_key(self, private_key_path):
-        return self._extract_public_key(subprocess.check_output(['openssl', 'rsa', '-in', private_key_path, '-pubout'], stderr = subprocess.DEVNULL))
+        try:
+            return self._extract_public_key(subprocess.check_output(['openssl', 'rsa', '-in', private_key_path, '-pubout'], stderr = subprocess.DEVNULL))
+        except:
+            return self._extract_public_key(subprocess.check_output(['openssl', 'ec', '-in', private_key_path, '-pubout'], stderr = subprocess.DEVNULL))
 
-    def _load_public_key(self, cert_file_name, username=None):
-        public_key = None
-        backup_public_key = None
-        cert_file_path = self._find_file(self._config('certificate_path'),
-                                         ([username + '@' + cert_file_name, username + '@' + cert_file_name + '.pem'] if (username) else [])
-                                         + [cert_file_name, cert_file_name + '.pem'])
-        if (cert_file_path):
-            if (cert_file_path in self.public_keys):
-                return self.public_keys[cert_file_path]
-            self._debug('Loading public key from certificate ', cert_file_path, '\n')
-            public_key = self._public_key_from_certificate(cert_file_path)
-        else:
-            private_key_path = self._find_file(self._config('private_key_path'),
-                                               ([username + '@' + cert_file_name, username + '@' + cert_file_name + '.key'] if (username) else [])
-                                               + [cert_file_name, cert_file_name + '.key'])
-            if (private_key_path):
-                self._debug('Loading public key from private key ', private_key_path, '\n')
-                public_key = self._public_key_from_private_key(private_key_path)
-
-        backup_private_key_path = self._find_file(self._config('private_key_path'),
-                                                  ([username + '@' + cert_file_name + '_backup', username + '@' + cert_file_name + '_backup.key'] if (username) else [])
-                                                  + [cert_file_name + '_backup', cert_file_name + '_backup.key'])
-        if (backup_private_key_path):
-            self._debug('Loading backup public key from private key ', backup_private_key_path, '\n')
-            backup_public_key = self._public_key_from_private_key(backup_private_key_path)
-        if (public_key):
-            self.public_keys[cert_file_path] = (public_key, backup_public_key)
-            return (public_key, backup_public_key)
-        self._warn('Certificate or private key file not found for ', cert_file_name, '\n')
-        return (None, None)
+    def _load_public_keys(self, cert_file_name, type, username=None):
+        public_keys = []
+        for suffix in self._key_suffixes[type]:
+            cert_file_path = self._find_file(self._config('certificate_path'),
+                                             ([username + '@' + cert_file_name + suffix, username + '@' + cert_file_name + suffix + '.pem'] if (username) else [])
+                                             + [cert_file_name + suffix, cert_file_name + suffix + '.pem'])
+            if (cert_file_path):
+                if (cert_file_path in self.public_keys):
+                    public_keys.append(self.public_keys[cert_file_path])
+                else:
+                    self._debug('Loading public key from certificate ', cert_file_path, '\n')
+                    public_key = self._public_key_from_certificate(cert_file_path)
+                    self.public_keys[cert_file_path] = public_key
+                    public_keys.append(public_key)
+            else:
+                private_key_path = self._find_file(self._config('private_key_path'),
+                                                   ([username + '@' + cert_file_name + suffix, username + '@' + cert_file_name + suffix + '.key'] if (username) else [])
+                                                   + [cert_file_name + suffix, cert_file_name + suffix + '.key'])
+                if (private_key_path):
+                    if (private_key_path in self.public_keys):
+                        public_keys.append(self.public_keys[private_key_path])
+                    else:
+                        self._debug('Loading public key from private key ', private_key_path, '\n')
+                        public_key = self._public_key_from_private_key(private_key_path)
+                        self.public_keys[cert_file_path] = public_key
+                        public_keys.append(public_key)
+        if (not public_keys):
+            self._warn('Certificate or private key file not found for ', cert_file_name, '\n')
+        return public_keys
 
     def _load_dkim_public_key(self, key_file_name):
         key_file_path = os.path.join(self._config('dkim_path'), key_file_name, 'default.private')
@@ -288,8 +306,8 @@ class BindTool(object):
         return output
 
     def tlsa_record(self, params, command, zone_name):
-        params = self._parse_params(params, ['port', 'host', 'cert_file', 'usage', 'selector', 'proto', 'ttl'],
-                                    {'port': '443', 'host': '', 'cert_file': zone_name, 'usage': 'pkix-ee', 'selector': 'spki', 'proto': 'tcp', 'ttl': ''},
+        params = self._parse_params(params, ['port', 'host', 'cert_file', 'usage', 'selector', 'proto', 'ttl', 'type'],
+                                    {'port': '443', 'host': '', 'cert_file': zone_name, 'usage': 'pkix-ee', 'selector': 'spki', 'proto': 'tcp', 'ttl': '', 'type': ''},
                                     {'host': '.', 'ttl': '\t'})
         if (not params['port'].isdigit()):
             self._error('Port must be numeric for {{', command,'}}\n')
@@ -299,20 +317,21 @@ class BindTool(object):
             self._error('Unknown selector ', params['selector'], ' for {{', command, '}}\n')
         if (params['proto'] not in ('tcp', 'udp', 'sctp', 'dccp')):
             self._error('Unknown protocol ', params['proto'], ' for {{', command, '}}\n')
+        if (params['type'] not in ('', 'rsa', 'ecdsa')):
+            self._error('Unknown key type ', params['type'], 'for {{', command, '}}\n')
 
         usage = { 'pkix-ta': '0', 'pkix-ee': '1', 'dane-ta': '2', 'dane-ee': '3' }
         selector = { 'cert': '0', 'spki': '1' }
 
-        primary, backup = (self._load_certificate(params['cert_file']), None) if ('cert' == params['selector']) else self._load_public_key(params['cert_file'])
-        if (not primary):
+        payloads = self._load_certificates(params['cert_file'], params['type']) if ('cert' == params['selector']) else self._load_public_keys(params['cert_file'], params['type'])
+        if (not payloads):
             return ''
 
         record = '_{port}._{proto}{host}{ttl}\tTLSA\t{usage_id} {selector_id} '.format(usage_id=usage[params['usage']], selector_id=selector[params['selector']], **params)
-        output = record + '1 {digest}\n'.format(digest=self._sha256(primary))
-        output += record + '2 {digest}\n'.format(digest=self._sha512(primary))
-        if (backup):
-            output += record + '1 {digest}\n'.format(digest=self._sha256(backup))
-            output += record + '2 {digest}\n'.format(digest=self._sha512(backup))
+        output = ''
+        for payload in payloads:
+            output += record + '1 {digest}\n'.format(digest=self._sha256(payload))
+            output += record + '2 {digest}\n'.format(digest=self._sha512(payload))
         return output
 
     def _email_hash(self, localpart):
@@ -322,8 +341,8 @@ class BindTool(object):
         return localpart
 
     def smimea_record(self, params, command, zone_name):
-        params = self._parse_params(params, ['user', 'host', 'cert_file', 'usage', 'selector', 'ttl'],
-                                    {'host': '', 'cert_file': zone_name, 'usage': 'pkix-ee', 'selector': 'cert', 'ttl': ''},
+        params = self._parse_params(params, ['user', 'host', 'cert_file', 'usage', 'selector', 'ttl', 'type'],
+                                    {'host': '', 'cert_file': zone_name, 'usage': 'pkix-ee', 'selector': 'cert', 'ttl': '', 'type': ''},
                                     {'host': '.', 'ttl': '\t'})
         if ('user' not in params):
             self._error('smimea record must specify user {{', command, '}}\n')
@@ -331,22 +350,23 @@ class BindTool(object):
             self._error('Unknown usage ', params['usage'], ' for {{', command, '}}\n')
         if (params['selector'] not in ('cert', 'spki')):
             self._error('Unknown selector ', params['selector'], ' for {{', command, '}}\n')
+        if (params['type'] not in ('', 'rsa', 'ecdsa')):
+            self._error('Unknown key type ', params['type'], 'for {{', command, '}}\n')
 
         userhash = self._email_hash(params['user'])
         usage = { 'pkix-ta': '0', 'pkix-ee': '1', 'dane-ta': '2', 'dane-ee': '3' }
         selector = { 'cert': '0', 'spki': '1' }
 
-        primary, backup = (self._load_certificate(params['cert_file'], params['user']), None) if ('cert' == params['selector']) else self._load_public_key(params['cert_file'], params['user'])
-        if (not primary):
+        payloads = self._load_certificates(params['cert_file'], params['type'], params['user']) if ('cert' == params['selector']) else self._load_public_keys(params['cert_file'], params['type'], params['user'])
+        if (not payloads):
             return ''
 
         record = '{userhash}._smimecert{host}{ttl}\tSMIMEA\t{usage_id} {selector_id} '.format(userhash=userhash, usage_id=usage[params['usage']], selector_id=selector[params['selector']], **params)
-        output = record + '0 {cert}\n'.format(cert=self._wrap(binascii.hexlify(primary).decode('ascii'), 120)) if ('cert' == params['selector']) else ''
-        output += record + '1 {digest}\n'.format(digest=self._sha256(primary))
-        output += record + '2 {digest}\n'.format(digest=self._sha512(primary))
-        if (backup):
-            output += record + '1 {digest}\n'.format(digest=self._sha256(backup))
-            output += record + '2 {digest}\n'.format(digest=self._sha512(backup))
+        output = ''
+        for payload in payloads:
+            output += record + '0 {cert}\n'.format(cert=self._wrap(self._hex(payload), 120)) if ('cert' == params['selector']) else ''
+            output += record + '1 {digest}\n'.format(digest=self._sha256(payload))
+            output += record + '2 {digest}\n'.format(digest=self._sha512(payload))
         return output
 
     def acme_record(self, params, command, zone_name):

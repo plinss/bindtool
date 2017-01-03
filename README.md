@@ -145,7 +145,7 @@ Becomes:
 
 TLSA records are specified as follows:
 
-    {{tlsa:port:host:cert_file:usage:selector:proto:ttl}
+    {{tlsa:port:host:cert_file:usage:selector:proto:ttl:type}
 
 The 'port' argument is required, all others are optional.
 
@@ -165,10 +165,16 @@ The default value is 'spki'.
 The default value is 'tcp'.
 * 'ttl' is the TTL value for the TLSA record.
 The default value is empty.
+* 'type' is blank or one of the following: 'rsa', 'ecdsa'.
+If specified, it will restrict TLSA records to that key type,
+otherwise TLSA records will be generated for all avaiable keys.
+Keys will be located by appending '.rsa' and '.ecdsa' after the name of the 'cert_file' (before the file extension, e.g. 'example.com.ecdsa.key').
+The '.rsa' suffix is optional for RSA keys.
 
-Two TLSA records will be generated, one using a SHA256 digest and one using a SHA512 digest.
+Two TLSA records will be generated for each available key type,
+one using a SHA256 digest and one using a SHA512 digest.
 When using the 'spki' selector, the tool will additionally look for a backup key file using the file name of the 'cert_file' + '_backup' (before the file extension, e.g. 'example.com_backup.key').
-If a backup key is found, an additional two TLSA records will be generated for the backup key.
+If a backup key is found, additional TLSA records will be generated for the backup key.
 
 Example:
 
@@ -203,11 +209,17 @@ For 'cert' selectors the 'cert_file' must be a certificate, for 'spki' selectors
 The default value is 'cert'.
 * 'ttl' is the TTL value for the SMIMEA record.
 The default value is empty.
+* 'type' is blank or one of the following: 'rsa', 'ecdsa'.
+If specified, it will restrict TLSA records to that key type,
+otherwise TLSA records will be generated for all avaiable keys.
+Keys will be located by appending '.rsa' and '.ecdsa' after the name of the 'cert_file' (before the file extension, e.g. 'example.com.ecdsa.key').
+The '.rsa' suffix is optional for RSA keys.
 
-Two SMIMEA records will be generated, one using a SHA256 digest and one using a SHA512 digest.
+Two SMIMEA records will be generated for each available key type,
+one using a SHA256 digest and one using a SHA512 digest.
 For 'cert' selectors an additional record will be generated with the full contents of the certificate.
 When using the 'spki' selector, the tool will additionally look for a backup key file using the file name of the 'cert_file' + '_backup' (before the file extension, e.g. 'example.com_backup.key').
-If a backup key is found, an additional two SMIMEA records will be generated for the backup key.
+If a backup key is found, additional SMIMEA records will be generated for the backup key.
 
 Example:
 
@@ -235,7 +247,8 @@ The default value is empty.
 
 The contents of the ACME challenge file is a single dictionary whose keys are host names and values are the ACME challenge values.
 One record will be generated for each key/value pair.
-This record type is meant to be used with an automatic ACME certificate managment bot doing dns-01 authorizations.
+This record type is meant to be used with an automatic ACME certificate managment bot doing dns-01 authorizations,
+such as [acmebot](https://github.com/plinss/acmebot).
 If the challenge file does not exist, no records will be generated and no error will occour.
 
 Example:
