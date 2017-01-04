@@ -421,7 +421,9 @@ class BindTool(object):
                     command = match.group(2)
                     input = match.group(3)
                     self._debug('processing ', command, '\n')
-                    if (re.match(r'^[a-z]+:', command)):
+                    if (command.startswith('-')):
+                        pass
+                    elif (re.match(r'^[a-z]+:', command)):
                         if ((0 == len(output)) or ('\n' == output[-1]) and ('\n' == input[0:1])):
                             input = input[1:]
                         record, *params = command.split(':')

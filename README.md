@@ -70,7 +70,11 @@ The format for these records is:
 
 Optional arguments my be omitted, however if all arguments are omitted, at least one colon must follow the record type to distinguish it from a variable.
 Arguments may also be specified by name in order to skip optional arguments, e.g.:
+
     {{tlsa:443:ttl=300}}
+
+
+Records can be disabled by prepending the record type with '-'.
 
 
 ### SOA Records
