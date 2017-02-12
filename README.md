@@ -149,7 +149,7 @@ Becomes:
 
 TLSA records are specified as follows:
 
-    {{tlsa:port:host:cert_file:usage:selector:proto:ttl:type}
+    {{tlsa:port:host:cert_file:usage:selector:proto:ttl:type:pass}
 
 The `port` argument is required, all others are optional.
 
@@ -174,6 +174,8 @@ If specified, it will restrict TLSA records to that key type,
 otherwise TLSA records will be generated for all avaiable keys.
 Keys will be located by appending `.rsa` and `.ecdsa` after the name of the `cert_file` (before the file extension, e.g. `example.com.ecdsa.key`).
 The `.rsa` suffix is optional for RSA keys.
+* `pass` is the password for encrypted private key files.
+The default value is empty.
 
 Two TLSA records will be generated for each available key type,
 one using a SHA256 digest and one using a SHA512 digest.
@@ -194,7 +196,7 @@ Becomes:
 
 SMIMEA records are specified as follows:
 
-    {{smimea:user:host:cert_file:usage:selector:ttl}
+    {{smimea:user:host:cert_file:usage:selector:ttl:type:pass}
 
 The `user` argument is required, all others are optional.
 
@@ -218,6 +220,8 @@ If specified, it will restrict TLSA records to that key type,
 otherwise TLSA records will be generated for all avaiable keys.
 Keys will be located by appending `.rsa` and `.ecdsa` after the name of the `cert_file` (before the file extension, e.g. `example.com.ecdsa.key`).
 The `.rsa` suffix is optional for RSA keys.
+* `pass` is the password for encrypted private key files.
+The default value is empty.
 
 Two SMIMEA records will be generated for each available key type,
 one using a SHA256 digest and one using a SHA512 digest.

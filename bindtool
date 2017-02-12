@@ -16,12 +16,12 @@
 #   {{sshfp:[hostname:key_file:ttl]}}
 #       key_file defaults to 'ssh_host', if not abs path, looks in /etc/ssh
 #       key_file must not include _<type>_key.pub
-#   {{tlsa:port[:host:cert_file:usage:selector:proto:ttl:type]}
+#   {{tlsa:port[:host:cert_file:usage:selector:proto:ttl:type:pass]}
 #       if cert_file not abs path, looks in /etc/ssl/certs
 #       proto defaults to tcp
 #       usage one of pkix-ta, pkix-ee, dane-ta, dane-ee - defaults to pkix-ee
 #       selector one of cert, spki - defaults to spki
-#   {{smimea:user[:host:cert_file:usage:selector:ttl:type}}
+#   {{smimea:user[:host:cert_file:usage:selector:ttl:type:pass}}
 #       if cert_file not abs path, looks in /etc/ssl/certs
 #       usage one of pkix-ta, pkix-ee, dane-ta, dane-ee - defaults to pkix-ee
 #       selector one of cert, spki - defaults to cert
@@ -219,13 +219,16 @@ class BindTool(object):
     def _public_key_from_certificate(self, cert_file_path):
         return self._extract_public_key(subprocess.check_output(['openssl', 'x509', '-in', cert_file_path, '-pubkey', '-noout']))
 
-    def _public_key_from_private_key(self, private_key_path):
+    def _public_key_from_private_key(self, private_key_path, passphrase):
+        pass_arg = ['-passin', 'pass:{passphrase}'.format(passphrase=passphrase)] if (passphrase) else []
         try:
-            return self._extract_public_key(subprocess.check_output(['openssl', 'rsa', '-in', private_key_path, '-pubout'], stderr=subprocess.DEVNULL))
+            return self._extract_public_key(subprocess.check_output(['openssl', 'rsa', '-in', private_key_path, '-pubout'] + pass_arg,
+                                                                    stderr=subprocess.DEVNULL))
         except:
-            return self._extract_public_key(subprocess.check_output(['openssl', 'ec', '-in', private_key_path, '-pubout'], stderr=subprocess.DEVNULL))
+            return self._extract_public_key(subprocess.check_output(['openssl', 'ec', '-in', private_key_path, '-pubout'] + pass_arg,
+                                                                    stderr=subprocess.DEVNULL))
 
-    def _load_public_keys(self, cert_file_name, type, username=None):
+    def _load_public_keys(self, cert_file_name, type, passphrase, username=None):
         public_keys = []
         for suffix in self._key_suffixes[type]:
             cert_file_path = self._find_file(self._config('certificate_path'),
@@ -250,7 +253,7 @@ class BindTool(object):
                         public_keys.append(self.public_keys[private_key_path])
                     else:
                         self._debug('Loading public key from private key ', private_key_path, '\n')
-                        public_key = self._public_key_from_private_key(private_key_path)
+                        public_key = self._public_key_from_private_key(private_key_path, passphrase)
                         self.public_keys[cert_file_path] = public_key
                         public_keys.append(public_key)
         if (not public_keys):
@@ -310,10 +313,10 @@ class BindTool(object):
         return output
 
     def tlsa_record(self, params, command, zone_name):
-        params = self._parse_params(params, ['port', 'host', 'cert_file', 'usage', 'selector', 'proto', 'ttl', 'type'],
+        params = self._parse_params(params, ['port', 'host', 'cert_file', 'usage', 'selector', 'proto', 'ttl', 'type', 'pass'],
                                     {'port': '443', 'host': '', 'cert_file': zone_name,
                                      'usage': 'pkix-ee', 'selector': 'spki',
-                                     'proto': 'tcp', 'ttl': '', 'type': ''},
+                                     'proto': 'tcp', 'ttl': '', 'type': '', 'pass': None},
                                     {'host': '.', 'ttl': '\t'})
         if (not params['port'].isdigit()):
             self._error('Port must be numeric for {{', command, '}}\n')
@@ -332,7 +335,7 @@ class BindTool(object):
         if ('cert' == params['selector']):
             payloads = self._load_certificates(params['cert_file'], params['type'])
         else:
-            payloads = self._load_public_keys(params['cert_file'], params['type'])
+            payloads = self._load_public_keys(params['cert_file'], params['type'], params['pass'])
         if (not payloads):
             return ''
 
@@ -351,8 +354,8 @@ class BindTool(object):
         return localpart
 
     def smimea_record(self, params, command, zone_name):
-        params = self._parse_params(params, ['user', 'host', 'cert_file', 'usage', 'selector', 'ttl', 'type'],
-                                    {'host': '', 'cert_file': zone_name, 'usage': 'pkix-ee', 'selector': 'cert', 'ttl': '', 'type': ''},
+        params = self._parse_params(params, ['user', 'host', 'cert_file', 'usage', 'selector', 'ttl', 'type', 'pass'],
+                                    {'host': '', 'cert_file': zone_name, 'usage': 'pkix-ee', 'selector': 'cert', 'ttl': '', 'type': '', 'pass': None},
                                     {'host': '.', 'ttl': '\t'})
         if ('user' not in params):
             self._error('smimea record must specify user {{', command, '}}\n')
@@ -370,7 +373,7 @@ class BindTool(object):
         if ('cert' == params['selector']):
             payloads = self._load_certificates(params['cert_file'], params['type'], params['user'])
         else:
-            payloads = self._load_public_keys(params['cert_file'], params['type'], params['user'])
+            payloads = self._load_public_keys(params['cert_file'], params['type'], params['pass'], params['user'])
         if (not payloads):
             return ''
 
