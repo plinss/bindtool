@@ -138,6 +138,25 @@ class BindTool(object):
     def _config(self, key):
         return self.config.get(key, self._config_defaults.get(key))
 
+    def _split_command(self, command):
+        parts = []
+        part = ''
+        count = len(command)
+        index = 0
+        while (index < count):
+            if ('\\' == command[index]):
+                index += 1
+                if (index < count):
+                    part += command[index]
+            elif (':' == command[index]):
+                parts.append(part)
+                part = ''
+            else:
+                part += command[index]
+            index += 1
+        parts.append(part)
+        return parts
+
     def _parse_params(self, params, names, defaults={}, prefixes={}):
         out = defaults
         while (0 < len(params)):
@@ -447,7 +466,7 @@ class BindTool(object):
                     elif (re.match(r'^[a-z]+:', command)):
                         if ((0 == len(output)) or ('\n' == output[-1]) and ('\n' == input[0:1])):
                             input = input[1:]
-                        record, *params = command.split(':')
+                        record, *params = self._split_command(command)
                         if ('soa' == record):
                             output += self.soa_record(params, command, zone_name)
                             soa_processed = True
