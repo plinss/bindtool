@@ -293,6 +293,43 @@ Becomes:
     default._domainkey  TXT "v=DKIM1; k=rsa; p=MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQC2G8vw5hMce1Zy2ovLnBTEbXxiOqY/CsLu+uqlyMOdOjOGtQqx1wX2aXksazjEIQ3x5RfbuvRfVn/84W4J6WI90/a606veHHalQouXLfQIlu3QuTUkjsj+aldchivc/AI/wZNiIPrPR96UGIzBbSE9zGvwpQ23Z1LzGUXAsPKx1wIDAQAB"
 
 
+
+### DMARC Records
+
+DMARC (TXT) records are specified as follows:
+
+    {{dmarc:policy:rua:ruf:subdomain_policy:options:dkim_alignment:spf_alignment:report_format:interval:percent:ttl}}
+
+All arguments are optional.
+
+* `policy` is one of the following: `none`, `quarantine`, or `reject`.
+The default value is `none`.
+* `rua` is a comma separated lst of email addresses to receive aggregate reports.
+* `ruf` is a comma separated lst of email addresses to receive forensic reports.
+* `subdomain_policy` is one of the following: `none`, `quarantine`, or `reject`.
+The default value is `none`.
+* `options` is one of the following: `all`, `any`, `dkim`, or `spf`.
+The default value is `any`.
+* `dkim_alignment` is one of the following: `relaxed`, or `strict`.
+The default value is `relaxed`.
+* `spf_alignment` is one of the following: `relaxed`, or `strict`.
+The default value is `relaxed`.
+* `report_format` is one of the following: `afrf`, `iodef`.
+The default value is `afrf`.
+* `interval` is a numeric value (seconds).
+The default values is `86400` (1 day).
+* `percent` is a numeric value from 0 to 100.
+The default value is `100`.
+
+Example:
+
+    {{dmarc:rua@example.com:ruf@example.com}}
+
+Becomes:
+
+    _dmarc  TXT "v=DMARC1; rua=mailto:rua@example.com; ruf=mailto:ruf@example.com; p=none; sp=none; fo=1; adkim=r; aspf=r; rf=afrf; ri=86400; pct=100;"
+
+
 ### CAA Records
 
 CAA records are specified as follows:

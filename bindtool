@@ -28,6 +28,17 @@
 #   {{acme:[challenge_file:ttl]}}
 #       if challenge_file not abs path, looks in /etc/ssl/challenges
 #   {{dkim:[domain:host:ttl]}}
+#   {{dmarc:[policy:rua:ruf:subdomain_policy:options:dkim_alignment:spf_alignment:report_format:interval:percent:ttl]}}
+#       policy defaults to none, one of none, quarantine, reject
+#       rua email adresses to send aggregate reports (comma separated)
+#       ruf email adresses to send forensic reports (comma separated)
+#       subdomain_policy one of none, quarantine, reject
+#       options one of all, any, dkim, spf
+#       dkim_alignment one of strict or relaxed
+#       spf_alignment one of strict or relaxed
+#       report_format one of afrf or iodef
+#       interval number of seconds
+#       percent percent of messages to apply
 #   {{pgp:key_file[:ttl]}}
 #   {{caa:tag:caname[:flag:ttl]}}
 
@@ -67,7 +78,7 @@ class BindTool(object):
         self.script_name = os.path.basename(__file__)
 
         argparser = argparse.ArgumentParser(description='Preprocess bind zone files')
-        argparser.add_argument('--version', action='version', version='%(prog)s 0.3')
+        argparser.add_argument('--version', action='version', version='%(prog)s 0.4')
         argparser.add_argument('zone_file_path')
         argparser.add_argument('out_file_path', nargs='?')
         argparser.add_argument('-d', '--debug',
@@ -176,8 +187,8 @@ class BindTool(object):
                 out[name] = prefixes[name] + out[name]
         return out
 
-    def _wrap(self, value, length=80):
-        if (len(value) <= length):
+    def _wrap(self, value, length=80, threshold=100):
+        if (len(value) <= threshold):
             return value
         output = '(\n'
         while (0 < len(value)):
@@ -190,11 +201,12 @@ class BindTool(object):
         value = value.encode('ascii')
         return '{host}{ttl}\tTYPE{type}\t\\# {len} {data}\n'.format(host=host, type=type, len=len(value), data=self._wrap(self._hex(value)), **params)
 
-    def _txt_rr(self, params, host, data, length=80):
+    def _txt_rr(self, params, host, data, length=80, threshold=100):
         params['host'] = host
         output = '{host}{ttl}\tTXT\t'.format(**params)
-        if (len(data) <= length):
+        if (len(data) <= min(255, threshold)):
             return output + '"' + data + '"\n'
+        length = min(255, length)
         output += '(\n'
         while (0 < len(data)):
             output += '\t\t"' + data[:length] + '"\n'
@@ -297,6 +309,17 @@ class BindTool(object):
             return subprocess.check_output(['openssl', 'rsa', '-in', key_file_path, '-outform', 'DER', '-pubout'], stderr=subprocess.DEVNULL)
         self._warn('OpenDKIM key ', key_file_path, ' not found\n')
 
+    def _validate(self, params, command, param, values, convert=None):
+        if (params[param] not in values):
+            self._error('Unknown value "', params[param], '" for ', param, ' in {{', command, '}}\n',
+                        'Must be one of: "', '", "'.join(values), '"\n')
+        if (convert):
+            params[param] = convert[values.index(params[param])]
+
+    def _validate_numeric(self, params, command, param):
+        if (not params[param].isdigit()):
+            self._error(param.title(), ' must be numeric for {{', command, '}}\n')
+
     def soa_record(self, params, command, zone_name):
         params = self._parse_params(params, ['primary_server', 'admin', 'refresh', 'retry', 'expire', 'minimum', 'master_server', 'ttl'],
                                     {'refresh': '4h', 'retry': '1h', 'expire': '14d', 'minimum': '10m', 'master_server': '', 'ttl': ''},
@@ -349,19 +372,11 @@ class BindTool(object):
                                      'usage': 'pkix-ee', 'selector': 'spki',
                                      'proto': 'tcp', 'ttl': '', 'type': '', 'pass': None},
                                     {'host': '.', 'ttl': '\t'})
-        if (not params['port'].isdigit()):
-            self._error('Port must be numeric for {{', command, '}}\n')
-        if (params['usage'] not in ('pkix-ta', 'pkix-ee', 'dane-ta', 'dane-ee')):
-            self._error('Unknown usage ', params['usage'], ' for {{', command, '}}\n')
-        if (params['selector'] not in ('cert', 'spki')):
-            self._error('Unknown selector ', params['selector'], ' for {{', command, '}}\n')
-        if (params['proto'] not in ('tcp', 'udp', 'sctp', 'dccp')):
-            self._error('Unknown protocol ', params['proto'], ' for {{', command, '}}\n')
-        if (params['type'] not in ('', 'rsa', 'ecdsa')):
-            self._error('Unknown key type ', params['type'], 'for {{', command, '}}\n')
-
-        usage = {'pkix-ta': '0', 'pkix-ee': '1', 'dane-ta': '2', 'dane-ee': '3'}
-        selector = {'cert': '0', 'spki': '1'}
+        self._validate_numeric(params, command, 'port')
+        self._validate(params, command, 'usage', ('pkix-ta', 'pkix-ee', 'dane-ta', 'dane-ee'), ('0', '1', '2', '3'))
+        self._validate(params, command, 'selector', ('cert', 'spki'), ('0', '1'))
+        self._validate(params, command, 'proto', ('tcp', 'udp', 'sctp', 'dccp'))
+        self._validate(params, command, 'type', ('', 'rsa', 'ecdsa'))
 
         if ('cert' == params['selector']):
             payloads = self._load_certificates(params['cert_file'], params['type'])
@@ -370,8 +385,7 @@ class BindTool(object):
         if (not payloads):
             return ''
 
-        record = '_{port}._{proto}{host}{ttl}\tTLSA\t{usage_id} {selector_id} '.format(usage_id=usage[params['usage']],
-                                                                                       selector_id=selector[params['selector']], **params)
+        record = '_{port}._{proto}{host}{ttl}\tTLSA\t{usage} {selector} '.format(**params)
         output = ''
         for payload in payloads:
             output += record + '1 {digest}\n'.format(digest=self._sha256(payload))
@@ -390,16 +404,11 @@ class BindTool(object):
                                     {'host': '.', 'ttl': '\t'})
         if ('user' not in params):
             self._error('smimea record must specify user {{', command, '}}\n')
-        if (params['usage'] not in ('pkix-ta', 'pkix-ee', 'dane-ta', 'dane-ee')):
-            self._error('Unknown usage ', params['usage'], ' for {{', command, '}}\n')
-        if (params['selector'] not in ('cert', 'spki')):
-            self._error('Unknown selector ', params['selector'], ' for {{', command, '}}\n')
-        if (params['type'] not in ('', 'rsa', 'ecdsa')):
-            self._error('Unknown key type ', params['type'], 'for {{', command, '}}\n')
+        self._validate(params, command, 'usage', ('pkix-ta', 'pkix-ee', 'dane-ta', 'dane-ee'), ('0', '1', '2', '3'))
+        self._validate(params, command, 'selector', ('cert', 'spki'), ('0', '1'))
+        self._validate(params, command, 'type', ('', 'rsa', 'ecdsa'))
 
         userhash = self._email_hash(params['user'])
-        usage = {'pkix-ta': '0', 'pkix-ee': '1', 'dane-ta': '2', 'dane-ee': '3'}
-        selector = {'cert': '0', 'spki': '1'}
 
         if ('cert' == params['selector']):
             payloads = self._load_certificates(params['cert_file'], params['type'], params['user'])
@@ -408,11 +417,10 @@ class BindTool(object):
         if (not payloads):
             return ''
 
-        record = '{userhash}._smimecert{host}{ttl}\tSMIMEA\t{usage_id} {selector_id} '.format(userhash=userhash, usage_id=usage[params['usage']],
-                                                                                              selector_id=selector[params['selector']], **params)
+        record = '{userhash}._smimecert{host}{ttl}\tSMIMEA\t{usage} {selector} '.format(userhash=userhash, **params)
         output = ''
         for payload in payloads:
-            output += record + '0 {cert}\n'.format(cert=self._wrap(self._hex(payload), 120)) if ('cert' == params['selector']) else ''
+            output += record + '0 {cert}\n'.format(cert=self._wrap(self._hex(payload), 120, 125)) if ('cert' == params['selector']) else ''
             output += record + '1 {digest}\n'.format(digest=self._sha256(payload))
             output += record + '2 {digest}\n'.format(digest=self._sha512(payload))
         return output
@@ -450,6 +458,31 @@ class BindTool(object):
         if (dkim_public_key):
             return self._txt_rr(params, 'default._domainkey' + params['host'], 'v=DKIM1; k=rsa; p=' + base64.b64encode(dkim_public_key).decode('ascii'))
         return ''
+
+    def dmarc_record(self, params, command, zone_name):
+        params = self._parse_params(params, ['policy', 'rua', 'ruf', 'subdomain_policy', 'options', 'dkim_alignment', 'spf_alignment',
+                                             'report_format', 'interval', 'percent', 'ttl'],
+                                    {'policy': 'none', 'rua': '', 'ruf': '', 'subdomain_policy': 'none', 'options': 'any',
+                                     'dkim_alignment': 'relaxed', 'spf_alignment': 'relaxed', 'report_format': 'afrf',
+                                     'interval': '86400', 'percent': '100', 'ttl': ''}, {'ttl': '\t'})
+
+        if (params['rua']):
+            params['rua'] = 'rua=' + ','.join([('mailto:' + addr.strip()) for addr in params['rua'].split(',')]) + '; '
+        if (params['ruf']):
+            params['ruf'] = 'ruf=' + ','.join([('mailto:' + addr.strip()) for addr in params['ruf'].split(',')]) + '; '
+
+        self._validate(params, command, 'policy', ('none', 'quarantine', 'reject'))
+        self._validate(params, command, 'subdomain_policy', ('none', 'quarantine', 'reject'))
+        self._validate(params, command, 'options', ('all', 'any', 'dkim', 'spf'), ('0', '1', 'd', 's'))
+        self._validate(params, command, 'dkim_alignment', ('strict', 'relaxed'), ('s', 'r'))
+        self._validate(params, command, 'spf_alignment', ('strict', 'relaxed'), ('s', 'r'))
+        self._validate(params, command, 'report_format', ('afrf', 'iodef'))
+        self._validate_numeric(params, command, 'interval')
+        self._validate_numeric(params, command, 'percent')
+
+        return self._txt_rr(params, '_dmarc',
+                            'v=DMARC1; p={policy}; {rua}{ruf}sp={subdomain_policy}; fo={options}; adkim={dkim_alignment}; aspf={spf_alignment}; '
+                            'rf={report_format}; ri={interval}; pct={percent};'.format(**params))
 
     def pgp_record(self, params, command, zone_name):
         self._error('pgp records not yet supported\n')
@@ -493,6 +526,8 @@ class BindTool(object):
                             output += self.caa_record(params, command, zone_name)
                         elif ('dkim' == record):
                             output += self.dkim_record(params, command, zone_name)
+                        elif ('dmarc' == record):
+                            output += self.dmarc_record(params, command, zone_name)
                         elif ('pgp' == record):
                             output += self.pgp_record(params, command, zone_name)
                         else:
