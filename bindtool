@@ -492,8 +492,7 @@ class BindTool(object):
         if (-1 < last_line_index):
             last_line = output[last_line_index + 1:]
             if (';' in last_line):
-                newline = '\n' if (records.endswith('\n')) else ''
-                return output + '\n;'.join([record for record in records.rstrip('\n').split('\n')]) + newline
+                return output + '\n;'.join([record for record in records.split('\n')])
         return output + records
 
     def process_zone_file(self, zone_file_path, out_file_path):
@@ -517,7 +516,7 @@ class BindTool(object):
                     if (command.startswith('-')):
                         pass
                     elif (re.match(r'^[a-z]+:', command)):
-                        if ((0 == len(output)) or ('\n' == output[-1]) and ('\n' == input[0:1])):
+                        if (((0 == len(output)) or ('\n' == output[-1])) and ('\n' == input[0:1])):
                             input = input[1:]
                         record, *params = self._split_command(command)
                         if ('soa' == record):
