@@ -487,6 +487,15 @@ class BindTool(object):
     def pgp_record(self, params, command, zone_name):
         self._error('pgp records not yet supported\n')
 
+    def _append(self, output, records):
+        last_line_index = output.rfind('\n')
+        if (-1 < last_line_index):
+            last_line = output[last_line_index + 1:]
+            if (';' in last_line):
+                newline = '\n' if (records.endswith('\n')) else ''
+                return output + '\n;'.join([record for record in records.rstrip('\n').split('\n')]) + newline
+        return output + records
+
     def process_zone_file(self, zone_file_path, out_file_path):
         if (not os.path.isfile(zone_file_path)):
             self._error('Zone file ', zone_file_path, ' not found\n')
@@ -512,24 +521,24 @@ class BindTool(object):
                             input = input[1:]
                         record, *params = self._split_command(command)
                         if ('soa' == record):
-                            output += self.soa_record(params, command, zone_name)
+                            output = self._append(output, self.soa_record(params, command, zone_name))
                             soa_processed = True
                         elif ('sshfp' == record):
-                            output += self.sshfp_record(params, command, zone_name)
+                            output = self._append(output, self.sshfp_record(params, command, zone_name))
                         elif ('tlsa' == record):
-                            output += self.tlsa_record(params, command, zone_name)
+                            output = self._append(output, self.tlsa_record(params, command, zone_name))
                         elif ('smimea' == record):
-                            output += self.smimea_record(params, command, zone_name)
+                            output = self._append(output, self.smimea_record(params, command, zone_name))
                         elif ('acme' == record):
-                            output += self.acme_record(params, command, zone_name)
+                            output = self._append(output, self.acme_record(params, command, zone_name))
                         elif ('caa' == record):
-                            output += self.caa_record(params, command, zone_name)
+                            output = self._append(output, self.caa_record(params, command, zone_name))
                         elif ('dkim' == record):
-                            output += self.dkim_record(params, command, zone_name)
+                            output = self._append(output, self.dkim_record(params, command, zone_name))
                         elif ('dmarc' == record):
-                            output += self.dmarc_record(params, command, zone_name)
+                            output = self._append(output, self.dmarc_record(params, command, zone_name))
                         elif ('pgp' == record):
-                            output += self.pgp_record(params, command, zone_name)
+                            output = self._append(output, self.pgp_record(params, command, zone_name))
                         else:
                             self._error('Unknown command: ', command, '\n')
                     elif ('=' in command):
@@ -541,7 +550,7 @@ class BindTool(object):
                         vars[var.strip()] = value.strip()
                         self._debug('set: ', var, ' = ', value, '\n')
                     elif (command in vars):
-                        output += vars[command]
+                        output = self._append(output, vars[command])
                     else:
                         self._error('Unknown variable: ', command, '\n')
                 else:
