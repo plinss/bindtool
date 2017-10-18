@@ -67,7 +67,7 @@ class BindTool(object):
         self.script_name = os.path.basename(__file__)
 
         argparser = argparse.ArgumentParser(description='Preprocess bind zone files')
-        argparser.add_argument('--version', action='version', version='%(prog)s 0.2')
+        argparser.add_argument('--version', action='version', version='%(prog)s 0.3')
         argparser.add_argument('zone_file_path')
         argparser.add_argument('out_file_path', nargs='?')
         argparser.add_argument('-d', '--debug',
@@ -186,9 +186,21 @@ class BindTool(object):
         output += '\t)'
         return output
 
-    def _generic_rr(self, type, value):
+    def _generic_rr(self, params, host, type, value):
         value = value.encode('ascii')
-        return 'TYPE{type}\t\\# {len} {data}'.format(type=type, len=len(value), data=self._wrap(self._hex(value)))
+        return '{host}{ttl}\tTYPE{type}\t\\# {len} {data}\n'.format(host=host, type=type, len=len(value), data=self._wrap(self._hex(value)), **params)
+
+    def _txt_rr(self, params, host, data, length=80):
+        params['host'] = host
+        output = '{host}{ttl}\tTXT\t'.format(**params)
+        if (len(data) <= length):
+            return output + '"' + data + '"\n'
+        output += '(\n'
+        while (0 < len(data)):
+            output += '\t\t"' + data[:length] + '"\n'
+            data = data[length:]
+        output += '\t)\n'
+        return output
 
     def _hex(self, value):
         return binascii.hexlify(value).decode('ascii')
@@ -414,13 +426,13 @@ class BindTool(object):
             with open(challenge_path) as challenge_file:
                 challenges = json.load(challenge_file, object_pairs_hook=collections.OrderedDict)
             for host in challenges:
-                output += '_acme-challenge.{host}.{ttl}\tTXT\t"{challenge}"\n'.format(host=host, challenge=challenges[host], **params)
+                output += self._txt_rr(params, '_acme-challenge.' + host, challenges[host])
         else:
             self._debug('ACME challenge file ', challenge_path, ' not found\n')
         return output
 
-    def _caa_rr(self, flag, tag, caname):
-        return self._generic_rr(257, chr(int(flag)) + chr(len(tag)) + tag + caname)
+    def _caa_rr(self, params, host, flag, tag, caname):
+        return self._generic_rr(params, host, 257, chr(int(flag)) + chr(len(tag)) + tag + caname)
 
     def caa_record(self, params, command, zone_name):
         params = self._parse_params(params, ['tag', 'caname', 'flag', 'ttl'], {'flag': '1', 'ttl': ''}, {'ttl': '\t'})
@@ -429,15 +441,14 @@ class BindTool(object):
         if ('caname' not in params):
             self._error('caa record must specify caname {{', command, '}}\n')
 
-        return '@{ttl}\t{generic}\n'.format(generic=self._caa_rr(params['flag'], params['tag'], params['caname']), **params)
+        return self._caa_rr(params, '@', params['flag'], params['tag'], params['caname'])
 
     def dkim_record(self, params, command, zone_name):
         params = self._parse_params(params, ['domain', 'host', 'ttl'], {'domain': zone_name, 'host': '', 'ttl': ''}, {'host': '.', 'ttl': '\t'})
 
         dkim_public_key = self._load_dkim_public_key(params['domain'])
         if (dkim_public_key):
-            return 'default._domainkey{host}{ttl}\tTXT\t"v=DKIM1; k=rsa; p={dkim_key}"\n'.format(dkim_key=base64.b64encode(dkim_public_key).decode('ascii'),
-                                                                                                 **params)
+            return self._txt_rr(params, 'default._domainkey' + params['host'], 'v=DKIM1; k=rsa; p=' + base64.b64encode(dkim_public_key).decode('ascii'))
         return ''
 
     def pgp_record(self, params, command, zone_name):
