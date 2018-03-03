@@ -98,6 +98,7 @@ class BindTool(object):
         self._config_defaults = {
             'certificate_path': '/etc/ssl/certs',
             'private_key_path': '/etc/ssl/private',
+            'backup_key_path': '/etc/ssl/private',
             'dkim_path': '/etc/opendkim/keys',
             'ssh_path': '/etc/ssh',
             'acme_path': '/etc/ssl/challenges'
@@ -226,11 +227,14 @@ class BindTool(object):
     def _sha512(self, value):
         return hashlib.sha512(value).hexdigest()
 
-    def _find_file(self, directory, file_names):
-        for file_name in file_names:
-            file_path = os.path.join(directory, file_name)
-            if (os.path.isfile(file_path)):
-                return file_path
+    def _find_file(self, directories, file_names):
+        if (isinstance(directories, str)):
+            directories = [directories]
+        for directory in directories:
+            for file_name in file_names:
+                file_path = os.path.join(directory, file_name)
+                if (os.path.isfile(file_path)):
+                    return file_path
         return None
 
     def _load_certificates(self, cert_file_name, type, username=None):
@@ -287,7 +291,7 @@ class BindTool(object):
                     self.public_keys[cert_file_path] = public_key
                     public_keys.append(public_key)
             else:
-                private_key_path = self._find_file(self._config('private_key_path'),
+                private_key_path = self._find_file([self._config('private_key_path'), self._config('backup_key_path')],
                                                    ([username + '@' + cert_file_name + suffix,
                                                      username + '@' + cert_file_name + suffix + '.key'] if (username) else [])
                                                    + [cert_file_name + suffix, cert_file_name + suffix + '.key'])
