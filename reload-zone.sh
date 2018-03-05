@@ -14,7 +14,7 @@ then
 	exit 2
 fi
 
-/etc/bind/bindtool /etc/bind/zones/${ZONE} /var/cache/bind/${ZONE}.out
+/usr/local/bin/bindtool /etc/bind/zones/${ZONE} /var/cache/bind/${ZONE}.out
 
 STATUS=$?
 if [ ${STATUS} -eq 0 ]
