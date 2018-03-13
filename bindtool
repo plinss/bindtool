@@ -41,6 +41,7 @@
 #       percent percent of messages to apply
 #   {{pgp:key_file[:ttl]}}
 #   {{caa:tag:caname[:flag:ttl]}}
+#   {{include:file_path}}
 
 
 import argparse
@@ -78,7 +79,7 @@ class BindTool(object):
         self.script_name = os.path.basename(__file__)
 
         argparser = argparse.ArgumentParser(description='Preprocess bind zone files')
-        argparser.add_argument('--version', action='version', version='%(prog)s 0.4')
+        argparser.add_argument('--version', action='version', version='%(prog)s 0.5')
         argparser.add_argument('zone_file_path')
         argparser.add_argument('out_file_path', nargs='?')
         argparser.add_argument('-d', '--debug',
@@ -491,6 +492,13 @@ class BindTool(object):
     def pgp_record(self, params, command, zone_name):
         self._error('pgp records not yet supported\n')
 
+    def include(self, params, command, zone_name, zone_file_path):
+        params = self._parse_params(params, ['include_file'], {'include_file': None}, {})
+        if (not params['include_file']):
+            self._error('Include file path not specified\n')
+        include_file_path = os.path.normpath(os.path.join(os.path.dirname(zone_file_path), params['include_file']))
+        return self._process_zone_file(include_file_path, zone_name)
+
     def _append(self, output, records):
         last_line_index = output.rfind('\n')
         if (-1 < last_line_index):
@@ -499,17 +507,15 @@ class BindTool(object):
                 return output + '\n;'.join([record for record in records.split('\n')])
         return output + records
 
-    def process_zone_file(self, zone_file_path, out_file_path):
+    def _process_zone_file(self, zone_file_path, zone_name):
         if (not os.path.isfile(zone_file_path)):
             self._error('Zone file ', zone_file_path, ' not found\n')
 
         with open(zone_file_path, 'r') as zone_file:
             input = zone_file.read()
             output = ''
-            vars = {}
             template_regex = re.compile(r'(.*?){{(.*?)}}(.*)', re.DOTALL)
-            zone_name = os.path.basename(zone_file_path)
-            soa_processed = False
+            has_soa = False
             while (input and (0 < len(input))):
                 match = template_regex.match(input)
                 if (match):
@@ -525,7 +531,7 @@ class BindTool(object):
                         record, *params = self._split_command(command)
                         if ('soa' == record):
                             output = self._append(output, self.soa_record(params, command, zone_name))
-                            soa_processed = True
+                            has_soa = True
                         elif ('sshfp' == record):
                             output = self._append(output, self.sshfp_record(params, command, zone_name))
                         elif ('tlsa' == record):
@@ -542,6 +548,10 @@ class BindTool(object):
                             output = self._append(output, self.dmarc_record(params, command, zone_name))
                         elif ('pgp' == record):
                             output = self._append(output, self.pgp_record(params, command, zone_name))
+                        elif ('include' == record):
+                            include, included_soa = self.include(params, command, zone_name, zone_file_path)
+                            output = self._append(output, include)
+                            has_soa = (has_soa or included_soa)
                         else:
                             self._error('Unknown command: ', command, '\n')
                     elif ('=' in command):
@@ -550,25 +560,32 @@ class BindTool(object):
                             if ('\n' == input[0:1]):
                                 input = input[1:]
                         var, value = command.split('=', 1)
-                        vars[var.strip()] = value.strip()
+                        self.vars[var.strip()] = value.strip()
                         self._debug('set: ', var, ' = ', value, '\n')
-                    elif (command in vars):
-                        output = self._append(output, vars[command])
+                    elif (command in self.vars):
+                        output = self._append(output, self.vars[command])
                     else:
                         self._error('Unknown variable: ', command, '\n')
                 else:
                     output += input
                     break
+        return output, has_soa
 
-            if (not soa_processed):
-                self._error('Zone file does not contain {{soa:}}\n')
+    def process_zone_file(self, zone_file_path, out_file_path):
+        self.vars = {}
 
-            if (out_file_path):
-                out_file_path = os.path.join(out_file_path, zone_name) if (os.path.isdir(out_file_path)) else out_file_path
-                with open(out_file_path, 'w') as out_file:
-                    out_file.write(output)
-            else:
-                print(output)
+        zone_name = os.path.basename(zone_file_path)
+        output, has_soa = self._process_zone_file(zone_file_path, zone_name)
+
+        if (not has_soa):
+            self._error('Zone file does not contain {{soa:}}\n')
+
+        if (out_file_path):
+            out_file_path = os.path.join(out_file_path, zone_name) if (os.path.isdir(out_file_path)) else out_file_path
+            with open(out_file_path, 'w') as out_file:
+                out_file.write(output)
+        else:
+            print(output)
 
     def run(self):
         self.process_zone_file(self.args.zone_file_path, self.args.out_file_path)

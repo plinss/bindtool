@@ -38,6 +38,7 @@ When making changes to a zone, edit the file in `/etc/bind/zones`, remove the se
 
 The script `reload-zone.sh` (provided in this repository) can be used to automate this process as well as reconfigure and restart the DNS server upon a successful run.
 
+
 ## Variable Substitution
 
 In the source file variables can be declared via the following syntax:
@@ -59,6 +60,20 @@ becomes:
 
     @   A   192.0.2.0
     www A   192.0.2.0
+
+Variables are available for use at any point after their declaration.
+
+
+## Include Files
+
+Additional source files can be included via the following syntax:
+
+    {{include:file_path}}
+
+The file found at `file_path` will be included in the output as though the contents of that file were included inline.
+The file path is relative to the path of the file containing the `include` command.
+Include files can include additional files.
+Variables defined in an include file are available for use in the file containing the `include` command at any point after the `include`.
 
 
 ## Record Generation
