@@ -102,7 +102,8 @@ class BindTool(object):
             'backup_key_path': '/etc/ssl/private',
             'dkim_path': '/etc/opendkim/keys',
             'ssh_path': '/etc/ssh',
-            'acme_path': '/etc/ssl/challenges'
+            'acme_path': '/etc/ssl/challenges',
+            'include_path': '/etc/bind/includes'
         }
         self._cert_suffixes = {
             '': ('', '.rsa', '.ecdsa'),
@@ -231,6 +232,8 @@ class BindTool(object):
     def _find_file(self, directories, file_names):
         if (isinstance(directories, str)):
             directories = [directories]
+        if (isinstance(file_names, str)):
+            file_names = [file_names]
         for directory in directories:
             for file_name in file_names:
                 file_path = os.path.join(directory, file_name)
@@ -496,7 +499,9 @@ class BindTool(object):
         params = self._parse_params(params, ['include_file'], {'include_file': None}, {})
         if (not params['include_file']):
             self._error('Include file path not specified\n')
-        include_file_path = os.path.normpath(os.path.join(os.path.dirname(zone_file_path), params['include_file']))
+        include_file_path = self._find_file([os.path.dirname(zone_file_path), self._config('include_path')], params['include_file'])
+        if (not include_file_path):
+            self._error('Include file "', params['include_file'], '" not found\n')
         return self._process_zone_file(include_file_path, zone_name)
 
     def _append(self, output, records):
