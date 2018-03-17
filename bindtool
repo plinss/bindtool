@@ -442,7 +442,7 @@ class BindTool(object):
             with open(challenge_path) as challenge_file:
                 challenges = json.load(challenge_file, object_pairs_hook=collections.OrderedDict)
             for host in challenges:
-                output += self._txt_rr(params, '_acme-challenge.' + host + '.', challenges[host])
+                output += self._txt_rr(params, '_acme-challenge.' + (host[2:] if (host.startswith('*.')) else host) + '.', challenges[host])
         else:
             self._debug('ACME challenge file ', challenge_path, ' not found\n')
         return output
