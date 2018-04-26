@@ -38,7 +38,7 @@ The `defaults` section specifies the default values for all of the arguments for
 
 For example, to change the default `expire` value for SOA records::
 
-   "defaults": {
+    "defaults": {
         "soa": {
             "expire": "7d",
         }
@@ -233,7 +233,7 @@ The default value is `@`.
 * `cert_file` is the file name of the certificate or private key used to secure the service.
 If the file name is an absolute path, it will be used verbatim,
 otherwise the file path will be relative to the configured `certificate`, `private_key`, `backup_key`, or `previous_key` directory
-and the file name will be passed into the correspoding file name format string.
+and the file name will be passed into the corresponding file name format string.
 Private keys will be searched for in each of the key directories.
 The default value is the name of the source zone file.
 * `usage` is one of the following: `pkix-ta`, `pkix-ee`, `dane-ta`, or `dane-ee`.
@@ -282,7 +282,7 @@ The default value is `@`.
 * `cert_file` is the file name of the certificate or private key used for S/MIME email for the user.
 If the file name is an absolute path, it will be used verbatim,
 otherwise the file path will be relative to the configured `certificate`, `private_key`, `backup_key`, or `previous_key` directory
-and the file name will be passed into the correspoding file name format string.
+and the file name will be passed into the corresponding file name format string.
 Private keys will be searched for in each of the key directories.
 The default value is the name of the source zone file.
 By default the `user` argument + `@` will be prepended to the file name, e.g. {{smimea:user}} will search for `user@example.com.rsa.pem`, etc.
@@ -328,7 +328,7 @@ All arguments are optional.
 * `challenge_file` is the file name of the json file storing ACME challenge information.
 If the file name is an absolute path, it will be used verbatim,
 otherwise the file path will be relative to the configured `acme` directory
-and the file name will be passed into the correspoding file name format string.
+and the file name will be passed into the corresponding file name format string.
 The default value is the name of the source zone file.
 * `ttl` is the TTL value for the TXT record.
 The default value is empty.
@@ -361,7 +361,7 @@ The default value is specified in the `settings` section of the config file.
 * `domain` is the name of the OpenDKIM private key.
 If `domain` is an absolute path, it will be used verbatim,
 otherwise the file path will be relative to the configured `dkim` directory
-and the file name will be passed into the correspoding file name format string.
+and the file name will be passed into the corresponding file name format string.
 The default value is the name of the source zone file.
 * `host` is the host name for the DKIM key.
 The default value is `@`
