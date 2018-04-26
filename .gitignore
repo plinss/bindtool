@@ -1,0 +1,8 @@
+etc/*
+var/*
+bindtool*.json
+
+*.pem
+*.zip
+*.orig
+*.sublime-*

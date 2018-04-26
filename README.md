@@ -12,14 +12,67 @@ This greatly simplifies keeping DNS zones current when keys change as no zone fi
 Requires Python3.4+ and the py3dns package.
 py3dns can be installed via:
 
-    pip install py3dns
-
-or if you have both Python2 and Python3 installed:
-
-    pip3 install py3dns
+    sudo pip3 install -r requirements.txt
 
 Clone this repository or download the `bindtool` file and install it on your master DNS server.
 Optionally copy the `bindtool.example.json` file to `bindtool.json` in the installed directory and edit the configuration options.
+
+
+### Configuration
+
+The example configuration file lists all possible options and their defaults.
+Only values that are different from the defaults need to be present.
+
+The configuration file `bindtool.json` may be placed in the current working directory,
+in /etc/bindtool,
+or in the same directory as the bindtool tool is installed in.
+A different configuration file name may be specified on the command line.
+If the specified file name is not an absolute path,
+it will be searched for in the same locations,
+e.g. `bindtool --config config.json` will load `./config.json`, `/etc/bindtool/config.json`, or `<install-dir>/config.json`.
+The file must adhere to standard JSON format.
+
+#### Defaults
+
+The `defaults` section specifies the default values for all of the arguments for the various record commands.
+
+For example, to change the default `expire` value for SOA records::
+
+   "defaults": {
+        "soa": {
+            "expire": "7d",
+        }
+    },
+    ...
+
+
+#### Directories
+
+The `directories` section specifies the directories to find various file types in.
+
+Directory values may include Python format strings for variable substitution.
+All directory types accept the {name} field.
+Certificate and private key directories also accept the {key_type}, {suffix}, and {username} fields.
+The dkim directory accepts the {selector} and {domain} fields.
+
+
+#### Key Type Suffixes
+
+Each certificate and key file will have a suffix, just before the file extension,
+indicating the type of key the file is for.
+
+The default suffix used for each key type can be overridden in the `key_type_suffixes` section.
+If you are only using a single key type, or want to omit the suffix from one key type,
+set it to an empty string.
+Note that if using multiple key types the suffix must be unique or files will be overridden.
+
+
+#### File Names
+
+All output file names can be overridden using standard Python format strings.
+All file name types accept the {name} field.
+Certificate and private key file names also accept the {key_type}, {suffix}, and {username} fields.
+The dkim file name accepts the {selector} and {domain} fields.
 
 
 ## Usage
@@ -71,7 +124,7 @@ Additional source files can be included via the following syntax:
     {{include:file_path}}
 
 The file found at `file_path` will be included in the output as though the contents of that file were included inline.
-The file path is relative to the path of the file containing the `include` command.
+The file path is relative to the path of the file containing the `include` command or the configured `include` directory.
 Include files can include additional files.
 Variables defined in an include file are available for use in the file containing the `include` command at any point after the `include`.
 
@@ -133,21 +186,26 @@ Becomes:
 
 SSHFP records are specified as follows:
 
-    {{sshfp:hostname:key_file:ttl}}
+    {{sshfp:hostname:key_file:ttl:type}}
 
 All arguments are optional.
 
 * `hostname` is the host name for the SSHFP record.
 The default value is `@`.
 * `key_file` is the name of the file the SSH host key files.
-The default value is `ssh_host`, note that key file names do not include the key type or file extension.
-If an absolute path is not specified, the path will be relative to `/etc/ssh` (may be changed in the config file).
+Key file names may be absolute or relative paths.
+If the file name is an absolute path, it will be used verbatim,
+otherwise the file path will be relative to the configured `ssh` directory (`/etc/ssh` by default)
+and the file name will be passed into the `ssh` file name format string, adding the key type and extension.
+The default value is `ssh_host`.
+If using an absolute path, the `type` must also be specified.
 * `ttl` is the TTL value for the SSHFP record.
 The default value is empty.
+* `type` is blank or one of the following: `rsa`, `dsa`, `ecdsa`, `ed25519`.
+If `type` is blank, SSHFP records will be generated for all key types for which public key files can be found,
+otherwise records for only the specified key type will be generated.
 
-The following key types are recognized: `rsa`, `dsa`, `ecdsa`, and `ed25519`.
 Two SSHFP records will be generated for each key file that is present, one with a SHA1 digest and one with a SHA256 digest.
-Note that the expected key files must be named: `<key_file>_<key_type>_key.pub`, e.g.: `ssh_host_ecdsa_key.pub`
 
 Example:
 
@@ -173,9 +231,11 @@ The `port` argument is required, all others are optional.
 * `host` is the host name for the service.
 The default value is `@`.
 * `cert_file` is the file name of the certificate or private key used to secure the service.
+If the file name is an absolute path, it will be used verbatim,
+otherwise the file path will be relative to the configured `certificate`, `private_key`, `backup_key`, or `previous_key` directory
+and the file name will be passed into the correspoding file name format string.
+Private keys will be searched for in each of the key directories.
 The default value is the name of the source zone file.
-For certificate files the `.pem` file extension is optional, for private key files the `.key` file extension is optional.
-If an absolute path is not specified, the path for certificate files will be relative to `/etc/ssl/certs` and the path for private key files will be realtive to `/etc/ssl/private` (may be changed in the config file).
 * `usage` is one of the following: `pkix-ta`, `pkix-ee`, `dane-ta`, or `dane-ee`.
 The default value is `pkix-ee`.
 * `selector` is `cert`, or `spki`.
@@ -195,8 +255,8 @@ The default value is empty.
 
 Two TLSA records will be generated for each available key type,
 one using a SHA256 digest and one using a SHA512 digest.
-When using the `spki` selector, the tool will additionally look for a backup key file using the file name of the `cert_file` + `_backup` (before the file extension, e.g. `example.com_backup.key`).
-If a backup key is found, additional TLSA records will be generated for the backup key.
+When using the `spki` selector, the tool will additionally look for backup and previous key files.
+If a backup or previous key is found, additional TLSA records will be generated for those keys.
 
 Example:
 
@@ -220,10 +280,12 @@ The `user` argument is required, all others are optional.
 * `host` is the host name for the email address.
 The default value is `@`.
 * `cert_file` is the file name of the certificate or private key used for S/MIME email for the user.
+If the file name is an absolute path, it will be used verbatim,
+otherwise the file path will be relative to the configured `certificate`, `private_key`, `backup_key`, or `previous_key` directory
+and the file name will be passed into the correspoding file name format string.
+Private keys will be searched for in each of the key directories.
 The default value is the name of the source zone file.
-The tool will first search for a certificate or private key file with the `user` argument + `@` prepended to the file name, e.g. {{smimea:user}} will search for `user@example.com`, then `example.com`.
-For certificate files the `.pem` file extension is optional, for private key files the `.key` file extension is optional.
-If an absolute path is not specified, the path for certificate files will be relative to `/etc/ssl/certs` and the path for private key files will be realtive to `/etc/ssl/private` (may be changed in the config file).
+By default the `user` argument + `@` will be prepended to the file name, e.g. {{smimea:user}} will search for `user@example.com.rsa.pem`, etc.
 * `usage` is one of the following: `pkix-ta`, `pkix-ee`, `dane-ta`, or `dane-ee`.
 The default value is `pkix-ee`.
 * `selector` is `cert`, or `spki`.
@@ -242,8 +304,8 @@ The default value is empty.
 Two SMIMEA records will be generated for each available key type,
 one using a SHA256 digest and one using a SHA512 digest.
 For `cert` selectors an additional record will be generated with the full contents of the certificate.
-When using the `spki` selector, the tool will additionally look for a backup key file using the file name of the `cert_file` + `_backup` (before the file extension, e.g. `example.com_backup.key`).
-If a backup key is found, additional SMIMEA records will be generated for the backup key.
+When using the `spki` selector, the tool will additionally look for backup and previous key files.
+If a backup or previous key is found, additional SMIMEA records will be generated for those keys.
 
 Example:
 
@@ -264,8 +326,10 @@ ACME Challenge (TXT) records are specified as follows:
 All arguments are optional.
 
 * `challenge_file` is the file name of the json file storing ACME challenge information.
+If the file name is an absolute path, it will be used verbatim,
+otherwise the file path will be relative to the configured `acme` directory
+and the file name will be passed into the correspoding file name format string.
 The default value is the name of the source zone file.
-If an absolute path is not specified, the path will be relative to `/etc/ssl/challenges` (may be changed in the config file).
 * `ttl` is the TTL value for the TXT record.
 The default value is empty.
 
@@ -288,12 +352,17 @@ Becomes:
 
 DKIM (TXT) records are specified as follows:
 
-    {{dkim:domain:host:ttl}}
+    {{dkim:selector:domain:host:ttl}}
 
 All arguments are optional.
 
+* `selector` is the DKIM selector.
+The default value is specified in the `settings` section of the config file.
 * `domain` is the name of the OpenDKIM private key.
-If an absolute path is not specified, the key will be in a path relative to `/etc/opendkim/keys` (may be changed in the config file) and in a file named `default.private`, e.g. `/etc/opendkim/<domain>/default.private`.
+If `domain` is an absolute path, it will be used verbatim,
+otherwise the file path will be relative to the configured `dkim` directory
+and the file name will be passed into the correspoding file name format string.
+The default value is the name of the source zone file.
 * `host` is the host name for the DKIM key.
 The default value is `@`
 * `ttl` is the TTL value for the TXT record.
@@ -306,7 +375,6 @@ Example:
 Becomes:
 
     default._domainkey  TXT "v=DKIM1; k=rsa; p=MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQC2G8vw5hMce1Zy2ovLnBTEbXxiOqY/CsLu+uqlyMOdOjOGtQqx1wX2aXksazjEIQ3x5RfbuvRfVn/84W4J6WI90/a606veHHalQouXLfQIlu3QuTUkjsj+aldchivc/AI/wZNiIPrPR96UGIzBbSE9zGvwpQ23Z1LzGUXAsPKx1wIDAQAB"
-
 
 
 ### DMARC Records

@@ -1,10 +1,88 @@
 {
-	"ssh_path": "/etc/ssh",
-	"certificate_path": "/etc/ssl/certs",
-	"private_key_path": "/etc/ssl/private",
-	"backup_key_path": "/etc/ssl/private",
-	"previous_key_path": "/etc/ssl/previous",
-	"acme_path": "/etc/ssl/challenges",
-	"dkim_path": "/etc/opendkim/keys",
-    "include_path": "/etc/bind/includes"
+    "defaults": {
+        "soa": {
+            "refresh": "4h",
+            "retry": "1h",
+            "expire": "14d",
+            "minimum": "10m",
+            "master_server": None,
+            "ttl": None
+        },
+        "sshfp": {
+            "host": "@",
+            "key_file": "ssh_host",
+            "ttl": None,
+            "type": None
+        },
+        "tlsa": {
+            "port": 443,
+            "host": None,
+            "usage": "pkix-ee",
+            "selector": "spki",
+            "proto": "tcp",
+            "ttl": None,
+            "type": None,
+            "pass": None
+        },
+        "smimea": {
+            "host": None,
+            "usage": "pkix-ee",
+            "selector": "cert",
+            "ttl": None,
+            "type": None,
+            "pass": None
+        },
+        "acme": {
+            "ttl": 60
+        },
+        "caa": {
+            "flag": 1,
+            "ttl": None,
+        },
+        "dkim": {
+            "host": None,
+            "ttl": None,
+            "selector": "default",
+        },
+        "dmarc": {
+            "policy": "none",
+            "rua": None,
+            "ruf": None,
+            "subdomain_policy": "none",
+            "options": "any",
+            "dkim_alignment": "relaxed",
+            "spf_alignment": "relaxed",
+            "report_format": "afrf",
+            "interval": 86400,
+            "percent": 100,
+            "ttl": None
+        },
+        "include": {
+            "file": None
+        }
+    },
+    "directories": {
+        "certificate": "/etc/ssl/certs",
+        "private_key": "/etc/ssl/private",
+        "backup_key": "/etc/ssl/private",
+        "previous_key": "/etc/ssl/previous",
+        "dkim": "/etc/opendkim/keys/{domain}",
+        "ssh": "/etc/ssh",
+        "acme": "/etc/ssl/challenges",
+        "include": "/etc/bind/includes"
+    },
+    "key_type_suffixes": {
+        "rsa": ".rsa",
+        "ecdsa": ".ecdsa"
+    },
+    "file_names": {
+        "certificate": "{username}{name}{suffix}.pem",
+        "private_key": "{username}{name}{suffix}.key",
+        "backup_key": "{username}{name}_backup{suffix}.key",
+        "previous_key": "{username}{name}_previous{suffix}.key",
+        "dkim": "{selector}.private",
+        "ssh": "{name}_{key_type}_key.pub",
+        "acme": "{name}",
+        "include": "{name}"
+    }
 }
