@@ -8,24 +8,38 @@ fi
 ZONE=$1
 ZONE=${ZONE##*/}
 
-if [ ! -f /etc/bind/zones/${ZONE} ]
+ZONEDIR=/etc/bind/zones
+CACHEDIR=/var/cache/bind
+
+if [ ! -f ${ZONEDIR}/${ZONE} ]
 then
 	echo "Zone file not found for ${ZONE}"
 	exit 2
 fi
 
-/usr/local/bin/bindtool /etc/bind/zones/${ZONE} /var/cache/bind/${ZONE}.out
+/usr/local/bin/bindtool ${ZONEDIR}/${ZONE} ${CACHEDIR}/${ZONE}.out
+
+STATUS=$?
+if [ ${STATUS} -ne 0 ]
+then
+	echo "Zone not modified"
+	exit ${STATUS}
+fi
+
+CHECK=$(/usr/sbin/named-checkzone ${ZONE} ${CACHEDIR}/${ZONE}.out)
 
 STATUS=$?
 if [ ${STATUS} -eq 0 ]
 then
 	systemctl stop bind9
-	rm -f /var/cache/bind/${ZONE}.jnl
-	mv /var/cache/bind/${ZONE}.out /var/cache/bind/${ZONE}
+	rm -f ${CACHEDIR}/${ZONE}.jnl
+	mv ${CACHEDIR}/${ZONE}.out ${CACHEDIR}/${ZONE}
 	systemctl start bind9
 	sleep 1
 	/usr/sbin/rndc reconfig
 else
+	echo "Error in zone file"
+	echo "${CHECK}"
 	echo "Zone not modified"
 	exit ${STATUS}
 fi
