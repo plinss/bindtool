@@ -121,7 +121,7 @@ class BindTool(object):
         self.script_name = os.path.basename(__file__)
 
         argparser = argparse.ArgumentParser(description='Preprocess bind zone files')
-        argparser.add_argument('--version', action='version', version='%(prog)s 1.0')
+        argparser.add_argument('--version', action='version', version='%(prog)s 1.0.1')
         argparser.add_argument('zone_file_path')
         argparser.add_argument('out_file_path', nargs='?')
         argparser.add_argument('-d', '--debug',
@@ -251,7 +251,7 @@ class BindTool(object):
                         return (json.load(config_file, object_pairs_hook=collections.OrderedDict), os.path.abspath(config_file_path))
                 except Exception as error:
                     self._error('Error reading config file ', config_file_path, ': ', error, '\n')
-        return (collections.OrderedDict(), None)
+        return (collections.OrderedDict(), '')
 
     def _message(self, *args):
         message = ''
@@ -320,7 +320,7 @@ class BindTool(object):
 
     def _validate_config(self, zone_file_path):
         if ('directories' not in self.config):
-            self.config['directories'] = {}
+            self.config['directories'] = collections.OrderedDict()
         for legacy_directory in ['certificate_path', 'private_key_path', 'backup_key_path', 'previous_key_path',
                                  'dkim_path', 'ssh_path', 'acme_path', 'include_path']:
             if (legacy_directory in self.config):
