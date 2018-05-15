@@ -43,44 +43,6 @@
 #   {{caa:tag:caname[:flag:ttl]}}
 #   {{include:file_path}}
 
-
-def verify_requirements():
-    import os
-    import pkg_resources
-    import re
-    requirements_file_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'requirements.txt')
-    if (os.path.exists(requirements_file_path)):
-        requirements_met = True
-        with open(requirements_file_path, 'r') as requirements_file:
-            requirements = requirements_file.read()
-            for requirement in requirements.split('\n'):
-                if (requirement):
-                    package, comparison, version = (re.split('\s?(<?>?==?)\s?', requirement) + ['', ''])[:3]
-                    try:
-                        installed_version = pkg_resources.get_distribution(package).version
-                        if ('<=' == comparison):
-                            if (installed_version > version):
-                                print('Package', package, 'is more recent than', version)
-                                requirements_met = False
-                        elif ('==' == comparison):
-                            if (installed_version != version):
-                                print('Package', package, 'is not version', version)
-                                requirements_met = False
-                        elif ('>=' == comparison):
-                            if (installed_version < version):
-                                print('Package', package, 'is older than', version)
-                                requirements_met = False
-                    except Exception:
-                        print('Package', package, 'is not installed')
-                        requirements_met = False
-        if (not requirements_met):
-            print('Run "pip3 install -r {path}" to complete installation'.format(path=requirements_file_path))
-            exit()
-
-
-verify_requirements()
-
-
 import argparse
 import base64
 import binascii

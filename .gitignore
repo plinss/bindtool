@@ -9,3 +9,8 @@ bindtool*.json
 
 /.idea/
 /*.iml
+
+/build/
+/*.egg-info
+/dist/
+/__pycache__/
