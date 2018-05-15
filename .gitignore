@@ -6,3 +6,6 @@ bindtool*.json
 *.zip
 *.orig
 *.sublime-*
+
+/.idea/
+/*.iml
