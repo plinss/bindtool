@@ -121,7 +121,7 @@ class BindTool(object):
         self.script_name = os.path.basename(__file__)
 
         argparser = argparse.ArgumentParser(description='Preprocess bind zone files')
-        argparser.add_argument('--version', action='version', version='%(prog)s 1.0.1')
+        argparser.add_argument('--version', action='version', version='%(prog)s 1.0.2')
         argparser.add_argument('zone_file_path')
         argparser.add_argument('out_file_path', nargs='?')
         argparser.add_argument('-d', '--debug',
@@ -331,37 +331,46 @@ class BindTool(object):
 
     def _split_command(self, command):
         parts = []
-        part = ''
+        name = ''
+        value = ''
         count = len(command)
         index = 0
         while (index < count):
-            if ('\\' == command[index]):
+            if ('"' == command[index]):
+                index += 1
+                while (index < count):
+                    if ('"' == command[index]):
+                        break
+                    value += command[index]
+                    index += 1
+            elif ('\\' == command[index]):
                 index += 1
                 if (index < count):
-                    part += command[index]
+                    value += command[index]
+            elif ('=' == command[index]):
+                name = value
+                value = ''
             elif (':' == command[index]):
-                parts.append(part)
-                part = ''
+                parts.append((name.strip(), value.strip()))
+                name = ''
+                value = ''
             else:
-                part += command[index]
+                value += command[index]
             index += 1
-        parts.append(part)
-        return parts
+        parts.append((name.strip(), value.strip()))
+        return (parts[0][1], parts[1:])
 
     def _parse_params(self, type, params, names, defaults={}, prefixes={}):
         out = self._defaults(type, defaults)
         while (0 < len(params)):
-            param = params.pop(0)
-            if ('=' in param):
-                name, value = param.split('=', 1)
-                name = name.strip()
+            name, value = params.pop(0)
+            if (name):
                 if (name in names):
                     names.remove(name)
             else:
                 name = names.pop(0)
-                value = param
             if (value):
-                out[name] = value.strip()
+                out[name] = value
         for name in prefixes:
             if ((name in out) and out[name]):
                 out[name] = prefixes[name] + out[name]
@@ -621,6 +630,7 @@ class BindTool(object):
             self._error('caa record must specify tag {{', command, '}}\n')
         if ('caname' not in params):
             self._error('caa record must specify caname {{', command, '}}\n')
+        self._validate_numeric(params, command, 'flag')
 
         return self._caa_rr(params, '@', params['flag'], params['tag'], params['caname'])
 
@@ -698,7 +708,7 @@ class BindTool(object):
                     elif (re.match(r'^[a-z]+:', command)):
                         if (((0 == len(output)) or ('\n' == output[-1])) and ('\n' == input[0:1])):
                             input = input[1:]
-                        record, *params = self._split_command(command)
+                        record, params = self._split_command(command)
                         if ('soa' == record):
                             output = self._append(output, self.soa_record(params, command, zone_name))
                             has_soa = True

@@ -141,7 +141,7 @@ Arguments may also be specified by name in order to skip optional arguments, e.g
 
     {{tlsa:443:ttl=300}}
 
-If an argument value needs to contain a colon, it can be escaped with a backslash, e.g. `\:`.
+If an argument value needs to contain a colon, equals sign, or quote, those symbols can be escaped with a backslash, e.g. `\:` or the value may be enclosed in double quotes.
 
 Records can be disabled by prepending the record type with `-`.
 
