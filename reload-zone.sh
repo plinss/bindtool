@@ -1,4 +1,5 @@
-#!/bin/bash
+#!/usr/bin/env bash
+
 if [ -z "$1" ]
 then
 	echo "USAGE: reload-zone.sh ZONE_NAME"
