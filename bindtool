@@ -508,7 +508,7 @@ class BindTool(object):
                 self._debug('Loading alternative names from certificate ', cert_file_path, '\n')
                 match = regex.match(subprocess.check_output(['openssl', 'x509', '-in', cert_file_path, '-noout', '-text']).decode('ascii'))
                 if (match):
-                    alternative_names |= set([name[4:] for name in match.group(1).split(', ')])
+                    alternative_names |= set([name[4:] for name in match.group(1).split(', ') if name.startswith('DNS:')])
         return alternative_names
 
     def _load_dkim_public_key(self, selector, domain):
