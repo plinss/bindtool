@@ -239,7 +239,7 @@ The default value is the name of the source zone file.
 * `usage` is one of the following: `pkix-ta`, `pkix-ee`, `dane-ta`, or `dane-ee`.
 The default value is `pkix-ee`.
 * `selector` is `cert`, or `spki`.
-For `cert` selectors the `cert_file` must be a certificate, for `spki` selectors the `cert_file` must be a private key.
+For `cert` selectors the `cert_file` must be a certificate, for `spki` selectors the `cert_file` may be a certificate or a private key.
 The default value is `spki`.
 * `proto` is one of the following: `tcp`, `udp`, `sctp`, or `dccp`.
 The default value is `tcp`.
@@ -261,6 +261,49 @@ If a backup or previous key is found, additional TLSA records will be generated 
 Example:
 
     {{tlsa:443:www}}
+
+Becomes:
+
+    _443._tcp.www   TLSA    1 1 1 90cebb19a148038c14e875153311bfc27603cbc64c78c9e9432114dd76425ab4
+    _443._tcp.www   TLSA    1 1 2 0f5ccb1dc77b699281c671976991acd6b597f42265329921d3273a9fcf71f599e1c6c7e15da4689a239eed9dbad0fbdfc0279ddefcf93a8f40680172ea60c4e0
+
+
+### TLSA Certificate Records
+
+TLSA Certificate records are specified as follows:
+
+    {{tlsa_cert:port:cert_file:usage:selector:proto:ttl:type}
+
+The `port` argument is required, all others are optional.
+
+* `port` is the TCP port for the service.
+* `cert_file` is the file name of the certificate used to secure the service.
+If the file name is an absolute path, it will be used verbatim,
+otherwise the file path will be relative to the configured `certificate` directory
+and the file name will be passed into the corresponding file name format string.
+The default value is the name of the source zone file.
+* `usage` is one of the following: `pkix-ta`, `pkix-ee`, `dane-ta`, or `dane-ee`.
+The default value is `pkix-ee`.
+* `selector` is `cert`, or `spki`.
+The default value is `spki`.
+* `proto` is one of the following: `tcp`, `udp`, `sctp`, or `dccp`.
+The default value is `tcp`.
+* `ttl` is the TTL value for the TLSA record.
+The default value is empty.
+* `type` is blank or one of the following: `rsa`, `ecdsa`.
+If specified, it will restrict TLSA records to that key type,
+otherwise TLSA records will be generated for all avaiable keys.
+Keys will be located by appending `.rsa` and `.ecdsa` after the name of the `cert_file` (before the file extension, e.g. `example.com.ecdsa.pem`).
+The `.rsa` suffix is optional for RSA keys.
+
+The host names used for the TLSA records will be taken from the subject alternative names in the certificate file.
+Two TLSA records will be generated for each subject alternative name present in the certificate for each available key type,
+one using a SHA256 digest and one using a SHA512 digest.
+Certificates must not contain subject alternative names containing wildcards.
+
+Example:
+
+    {{tlsa_cert:443}}
 
 Becomes:
 

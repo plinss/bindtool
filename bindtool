@@ -21,6 +21,11 @@
 #       proto defaults to tcp
 #       usage one of pkix-ta, pkix-ee, dane-ta, dane-ee - defaults to pkix-ee
 #       selector one of cert, spki - defaults to spki
+#   {{tlsa_cert:port[:cert_file:usage:selector:proto:ttl:type]}
+#       if cert_file not abs path, looks in /etc/ssl/certs
+#       proto defaults to tcp
+#       usage one of pkix-ta, pkix-ee, dane-ta, dane-ee - defaults to pkix-ee
+#       selector one of cert, spki - defaults to spki
 #   {{smimea:user[:host:cert_file:usage:selector:ttl:type:pass}}
 #       if cert_file not abs path, looks in /etc/ssl/certs
 #       usage one of pkix-ta, pkix-ee, dane-ta, dane-ee - defaults to pkix-ee
@@ -121,7 +126,7 @@ class BindTool(object):
         self.script_name = os.path.basename(__file__)
 
         argparser = argparse.ArgumentParser(description='Preprocess bind zone files')
-        argparser.add_argument('--version', action='version', version='%(prog)s 1.0.2')
+        argparser.add_argument('--version', action='version', version='%(prog)s 1.1.0')
         argparser.add_argument('zone_file_path')
         argparser.add_argument('out_file_path', nargs='?')
         argparser.add_argument('-d', '--debug',
@@ -157,6 +162,15 @@ class BindTool(object):
                 'tlsa': {
                     'port': 443,
                     'host': None,
+                    'usage': 'pkix-ee',
+                    'selector': 'spki',
+                    'proto': 'tcp',
+                    'ttl': None,
+                    'type': None,
+                    'pass': None
+                },
+                'tlsa_cert': {
+                    'port': 443,
                     'usage': 'pkix-ee',
                     'selector': 'spki',
                     'proto': 'tcp',
@@ -483,6 +497,20 @@ class BindTool(object):
             self._warn('Certificate or private key file not found for ', cert_file_name, '\n')
         return public_keys
 
+    def _alternative_names_from_certificate(self, cert_file_name, type):
+        alternative_names = set()
+        key_types = [type] if (type) else ['rsa', 'ecdsa']
+        regex = re.compile('.*X509v3 Subject Alternative Name:\\s*([^\\n]*)\\n.*', re.DOTALL)
+
+        for key_type in key_types:
+            cert_file_path = self._find_file('certificate', cert_file_name, key_type=key_type, username='')
+            if (cert_file_path):
+                self._debug('Loading alternative names from certificate ', cert_file_path, '\n')
+                match = regex.match(subprocess.check_output(['openssl', 'x509', '-in', cert_file_path, '-noout', '-text']).decode('ascii'))
+                if (match):
+                    alternative_names |= set([name[4:] for name in match.group(1).split(', ')])
+        return alternative_names
+
     def _load_dkim_public_key(self, selector, domain):
         key_file_path = self._find_file('dkim', domain, selector=selector, domain=domain)
         if (key_file_path):
@@ -572,6 +600,36 @@ class BindTool(object):
         for payload in payloads:
             output += record + '1 {digest}\n'.format(digest=self._sha256(payload))
             output += record + '2 {digest}\n'.format(digest=self._sha512(payload))
+        return output
+
+    def tlsa_cert_record(self, params, command, zone_name):
+        params = self._parse_params('tlsa_cert', params, ['port', 'cert_file', 'usage', 'selector', 'proto', 'ttl', 'type'],
+                                    {'cert_file': zone_name}, {'ttl': '\t'})
+        self._validate_numeric(params, command, 'port')
+        self._validate(params, command, 'usage', ('pkix-ta', 'pkix-ee', 'dane-ta', 'dane-ee'), ('0', '1', '2', '3'))
+        self._validate(params, command, 'selector', ('cert', 'spki'), ('0', '1'))
+        self._validate(params, command, 'proto', ('tcp', 'udp', 'sctp', 'dccp'))
+        self._validate(params, command, 'type', ('', 'rsa', 'ecdsa'))
+
+        alternative_names = self._alternative_names_from_certificate(params['cert_file'], params['type'])
+        if (not alternative_names):
+            return ''
+
+        if ('cert' == params['selector']):
+            payloads = self._load_certificates(params['cert_file'], params['type'])
+        else:
+            payloads = self._load_public_keys(params['cert_file'], params['type'], params['pass'])
+        if (not payloads):
+            return ''
+
+        output = ''
+        for host in alternative_names:
+            if ('*' in host):
+                self._error('tlsa_cert record certificate ', params['cert_file'], ' must not include wildcard hosts\n')
+            record = '_{port}._{proto}.{host}{ttl}\tTLSA\t{usage} {selector} '.format(host=host, **params)
+            for payload in payloads:
+                output += record + '1 {digest}\n'.format(digest=self._sha256(payload))
+                output += record + '2 {digest}\n'.format(digest=self._sha512(payload))
         return output
 
     def _email_hash(self, localpart):
@@ -705,7 +763,7 @@ class BindTool(object):
                     self._debug('processing ', command, '\n')
                     if (command.startswith('-')):
                         pass
-                    elif (re.match(r'^[a-z]+:', command)):
+                    elif (re.match(r'^[a-z_]+:', command)):
                         if (((0 == len(output)) or ('\n' == output[-1])) and ('\n' == input[0:1])):
                             input = input[1:]
                         record, params = self._split_command(command)
@@ -716,6 +774,8 @@ class BindTool(object):
                             output = self._append(output, self.sshfp_record(params, command, zone_name))
                         elif ('tlsa' == record):
                             output = self._append(output, self.tlsa_record(params, command, zone_name))
+                        elif ('tlsa_cert' == record):
+                            output = self._append(output, self.tlsa_cert_record(params, command, zone_name))
                         elif ('smimea' == record):
                             output = self._append(output, self.smimea_record(params, command, zone_name))
                         elif ('acme' == record):
