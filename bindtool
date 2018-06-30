@@ -803,10 +803,10 @@ class BindTool(object):
                         var, value = command.split('=', 1)
                         self.vars[var.strip()] = value.strip()
                         self._debug('set: ', var, ' = ', value, '\n')
-                    elif (command in self.vars):
-                        output = self._append(output, self.vars[command])
                     elif (command in param_vars):
                         output = self._append(output, param_vars[command])
+                    elif (command in self.vars):
+                        output = self._append(output, self.vars[command])
                     else:
                         self._error('Unknown variable: ', command, '\n')
                 else:
