@@ -728,14 +728,15 @@ class BindTool(object):
     def pgp_record(self, params, command, zone_name):
         self._error('pgp records not yet supported\n')
 
-    def include(self, params, command, zone_name, zone_file_path):
+    def include(self, params, command, zone_name, zone_file_path, param_vars):
         params = self._parse_params('include', params, ['file'], {}, {})
         if (not params['file']):
             self._error('Include file path not specified\n')
         include_file_path = self._find_file(['zone_file', 'include'], params['file'])
         if (not include_file_path):
             self._error('Include file "', params['file'], '" not found\n')
-        return self._process_zone_file(include_file_path, zone_name)
+        del params['file']
+        return self._process_zone_file(include_file_path, zone_name, {**param_vars, **params})
 
     def _append(self, output, records):
         last_line_index = output.rfind('\n')
@@ -745,7 +746,7 @@ class BindTool(object):
                 return output + '\n;'.join([record for record in records.split('\n')])
         return output + records
 
-    def _process_zone_file(self, zone_file_path, zone_name):
+    def _process_zone_file(self, zone_file_path, zone_name, param_vars):
         if (not os.path.isfile(zone_file_path)):
             self._error('Zone file ', zone_file_path, ' not found\n')
 
@@ -789,7 +790,7 @@ class BindTool(object):
                         elif ('pgp' == record):
                             output = self._append(output, self.pgp_record(params, command, zone_name))
                         elif ('include' == record):
-                            include, included_soa = self.include(params, command, zone_name, zone_file_path)
+                            include, included_soa = self.include(params, command, zone_name, zone_file_path, param_vars)
                             output = self._append(output, include)
                             has_soa = (has_soa or included_soa)
                         else:
@@ -804,6 +805,8 @@ class BindTool(object):
                         self._debug('set: ', var, ' = ', value, '\n')
                     elif (command in self.vars):
                         output = self._append(output, self.vars[command])
+                    elif (command in param_vars):
+                        output = self._append(output, param_vars[command])
                     else:
                         self._error('Unknown variable: ', command, '\n')
                 else:
@@ -813,9 +816,10 @@ class BindTool(object):
 
     def process_zone_file(self, zone_file_path, out_file_path):
         self.vars = {}
+        param_vars = {}
 
         zone_name = os.path.basename(zone_file_path)
-        output, has_soa = self._process_zone_file(zone_file_path, zone_name)
+        output, has_soa = self._process_zone_file(zone_file_path, zone_name, param_vars)
 
         if (not has_soa):
             self._error('Zone file does not contain {{soa:}}\n')
