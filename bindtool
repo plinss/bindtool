@@ -374,7 +374,7 @@ class BindTool(object):
         parts.append((name.strip(), value.strip()))
         return (parts[0][1], parts[1:])
 
-    def _parse_params(self, type, params, names, defaults={}, prefixes={}):
+    def _parse_params(self, type, params, names, defaults, prefixes, command):
         out = self._defaults(type, defaults)
         while (0 < len(params)):
             name, value = params.pop(0)
@@ -382,8 +382,11 @@ class BindTool(object):
                 if (name in names):
                     names.remove(name)
             else:
-                name = names.pop(0)
-            if (value):
+                if (0 < len(names)):
+                    name = names.pop(0)
+                else:
+                    self._error('Non-positional record arguments must have names {{', command, '}}\n')
+            if (value or (name not in out)):
                 out[name] = value
         for name in prefixes:
             if ((name in out) and out[name]):
@@ -530,7 +533,7 @@ class BindTool(object):
 
     def soa_record(self, params, command, zone_name):
         params = self._parse_params('soa', params, ['primary_server', 'admin', 'refresh', 'retry', 'expire', 'minimum', 'master_server', 'ttl'],
-                                    {}, {'ttl': '\t'})
+                                    {}, {'ttl': '\t'}, command)
         if ('primary_server' not in params):
             self._error('soa record must specify primary server {{', command, '}}\n')
         if ('admin' not in params):
@@ -554,7 +557,7 @@ class BindTool(object):
         return '@{ttl}\tSOA\t{primary_server} {admin} {serial} {refresh} {retry} {expire} {minimum}\n'.format(serial=serial, **params)
 
     def sshfp_record(self, params, command, zone_name):
-        params = self._parse_params('sshfp', params, ['host', 'key_file', 'ttl', 'type'], {}, {'ttl': '\t'})
+        params = self._parse_params('sshfp', params, ['host', 'key_file', 'ttl', 'type'], {}, {'ttl': '\t'}, command)
         self._validate(params, command, 'type', ('', 'rsa', 'dsa', 'ecdsa', 'ed25519'))
 
         key_type_value = {'rsa': 1, 'dsa': 2, 'ecdsa': 3, 'ed25519': 4}
@@ -581,7 +584,7 @@ class BindTool(object):
 
     def tlsa_record(self, params, command, zone_name):
         params = self._parse_params('tlsa', params, ['port', 'host', 'cert_file', 'usage', 'selector', 'proto', 'ttl', 'type', 'pass'],
-                                    {'cert_file': zone_name}, {'host': '.', 'ttl': '\t'})
+                                    {'cert_file': zone_name}, {'host': '.', 'ttl': '\t'}, command)
         self._validate_numeric(params, command, 'port')
         self._validate(params, command, 'usage', ('pkix-ta', 'pkix-ee', 'dane-ta', 'dane-ee'), ('0', '1', '2', '3'))
         self._validate(params, command, 'selector', ('cert', 'spki'), ('0', '1'))
@@ -604,7 +607,7 @@ class BindTool(object):
 
     def tlsa_cert_record(self, params, command, zone_name):
         params = self._parse_params('tlsa_cert', params, ['port', 'cert_file', 'usage', 'selector', 'proto', 'ttl', 'type'],
-                                    {'cert_file': zone_name}, {'ttl': '\t'})
+                                    {'cert_file': zone_name}, {'ttl': '\t'}, command)
         self._validate_numeric(params, command, 'port')
         self._validate(params, command, 'usage', ('pkix-ta', 'pkix-ee', 'dane-ta', 'dane-ee'), ('0', '1', '2', '3'))
         self._validate(params, command, 'selector', ('cert', 'spki'), ('0', '1'))
@@ -640,7 +643,7 @@ class BindTool(object):
 
     def smimea_record(self, params, command, zone_name):
         params = self._parse_params('smimea', params, ['user', 'host', 'cert_file', 'usage', 'selector', 'ttl', 'type', 'pass'],
-                                    {'cert_file': zone_name}, {'host': '.', 'ttl': '\t'})
+                                    {'cert_file': zone_name}, {'host': '.', 'ttl': '\t'}, command)
         if ('user' not in params):
             self._error('smimea record must specify user {{', command, '}}\n')
         self._validate(params, command, 'usage', ('pkix-ta', 'pkix-ee', 'dane-ta', 'dane-ee'), ('0', '1', '2', '3'))
@@ -665,7 +668,7 @@ class BindTool(object):
         return output
 
     def acme_record(self, params, command, zone_name):
-        params = self._parse_params('acme', params, ['challenge_file', 'ttl'], {'challenge_file': zone_name}, {'ttl': '\t'})
+        params = self._parse_params('acme', params, ['challenge_file', 'ttl'], {'challenge_file': zone_name}, {'ttl': '\t'}, command)
 
         output = ''
         challenge_path = self._find_file('acme', params['challenge_file'])
@@ -683,7 +686,7 @@ class BindTool(object):
 
     def caa_record(self, params, command, zone_name):
         params = self._parse_params('caa', params, ['tag', 'caname', 'flag', 'ttl'],
-                                    {}, {'ttl': '\t'})
+                                    {}, {'ttl': '\t'}, command)
         if ('tag' not in params):
             self._error('caa record must specify tag {{', command, '}}\n')
         if ('caname' not in params):
@@ -694,7 +697,7 @@ class BindTool(object):
 
     def dkim_record(self, params, command, zone_name):
         params = self._parse_params('dkim', params, ['selector', 'domain', 'host', 'ttl'],
-                                    {'domain': zone_name}, {'host': '.', 'ttl': '\t'})
+                                    {'domain': zone_name}, {'host': '.', 'ttl': '\t'}, command)
 
         dkim_public_key = self._load_dkim_public_key(params['selector'], params['domain'])
         if (dkim_public_key):
@@ -705,7 +708,7 @@ class BindTool(object):
     def dmarc_record(self, params, command, zone_name):
         params = self._parse_params('dmarc', params, ['policy', 'rua', 'ruf', 'subdomain_policy', 'options', 'dkim_alignment', 'spf_alignment',
                                                       'report_format', 'interval', 'percent', 'ttl'],
-                                    {}, {'ttl': '\t'})
+                                    {}, {'ttl': '\t'}, command)
 
         if (params['rua']):
             params['rua'] = 'rua=' + ','.join([('mailto:' + addr.strip()) for addr in params['rua'].split(',')]) + '; '
@@ -729,7 +732,7 @@ class BindTool(object):
         self._error('pgp records not yet supported\n')
 
     def include(self, params, command, zone_name, zone_file_path, param_vars):
-        params = self._parse_params('include', params, ['file'], {}, {})
+        params = self._parse_params('include', params, ['file'], {}, {}, command)
         if (not params['file']):
             self._error('Include file path not specified\n')
         include_file_path = self._find_file(['zone_file', 'include'], params['file'])
