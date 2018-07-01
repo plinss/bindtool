@@ -121,12 +121,16 @@ Variables are available for use at any point after their declaration.
 
 Additional source files can be included via the following syntax:
 
-    {{include:file_path}}
+    {{include:file_path:local_variable=value:...}}
 
 The file found at `file_path` will be included in the output as though the contents of that file were included inline.
 The file path is relative to the path of the file containing the `include` command or the configured `include` directory.
 Include files can include additional files.
 Variables defined in an include file are available for use in the file containing the `include` command at any point after the `include`.
+
+Additional named arguments may follow the include file path,
+these will define local variables available only inside the included file or files included by that file.
+Local variables will override normal variables with the same name.
 
 
 ## Record Generation
