@@ -739,7 +739,12 @@ class BindTool(object):
         if (not include_file_path):
             self._error('Include file "', params['file'], '" not found\n')
         del params['file']
-        return self._process_zone_file(include_file_path, zone_name, {**param_vars, **params})
+        local_vars = {}
+        for key, value in param_vars.items():
+            local_vars[key] = value
+        for key, value in params.items():
+            local_vars[key] = value
+        return self._process_zone_file(include_file_path, zone_name, local_vars)
 
     def _append(self, output, records):
         last_line_index = output.rfind('\n')
