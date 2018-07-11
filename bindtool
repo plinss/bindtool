@@ -238,7 +238,8 @@ class BindTool(object):
                 'ssh': '{name}_{key_type}_key.pub',
                 'acme': '{name}',
                 'include': '{name}',
-                'zone_file': '{name}'
+                'zone_file': '{name}',
+                'include_parent': '{name}'
             }
         }
         self._cert_suffixes = {
@@ -735,7 +736,10 @@ class BindTool(object):
         params = self._parse_params('include', params, ['file'], {}, {}, command)
         if (not params['file']):
             self._error('Include file path not specified\n')
-        include_file_path = self._find_file(['zone_file', 'include'], params['file'])
+        hold_include_parent = self.config['directories'].get('include_parent')
+        self.config['directories']['include_parent'] = os.path.dirname(os.path.realpath(zone_file_path))
+        include_file_path = self._find_file(['include_parent', 'zone_file', 'include'], params['file'])
+        self.config['directories']['include_parent'] = hold_include_parent
         if (not include_file_path):
             self._error('Include file "', params['file'], '" not found\n')
         del params['file']

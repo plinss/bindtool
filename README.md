@@ -124,7 +124,7 @@ Additional source files can be included via the following syntax:
     {{include:file_path:local_variable=value:...}}
 
 The file found at `file_path` will be included in the output as though the contents of that file were included inline.
-The file path is relative to the path of the file containing the `include` command or the configured `include` directory.
+The file path is will be searched for relative to the path of the file containing the `include` command, the primary zone file, or the configured `include` directory.
 Include files can include additional files.
 Variables defined in an include file are available for use in the file containing the `include` command at any point after the `include`.
 
