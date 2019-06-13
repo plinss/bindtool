@@ -405,9 +405,9 @@ class BindTool(object):
         output += '\t)'
         return output
 
-    def _generic_rr(self, params, host, type, value):
-        value = value.encode('ascii')
-        return '{host}{ttl}\tTYPE{type}\t\\# {len} {data}\n'.format(host=host, type=type, len=len(value), data=self._wrap(self._hex(value)), **params)
+    def _generic_rr(self, params, type, value):
+        value = value.encode()
+        return '{host}{ttl}\tTYPE{type}\t\\# {len} {data}\n'.format(type=type, len=len(value), data=self._wrap(self._hex(value)), **params)
 
     def _txt_rr(self, params, host, data, length=80, threshold=100):
         params['host'] = host
@@ -683,8 +683,8 @@ class BindTool(object):
             self._debug('ACME challenge file ', params['challenge_file'], ' not found\n')
         return output
 
-    def _caa_rr(self, params, host, flag, tag, caname):
-        return self._generic_rr(params, host, 257, chr(int(flag)) + chr(len(tag)) + tag + caname)
+    def _caa_rr(self, params, flag, tag, caname):
+        return self._generic_rr(params, 257, chr(int(flag)) + chr(len(tag)) + tag + caname)
 
     def caa_record(self, params, command, zone_name):
         params = self._parse_params('caa', params, ['tag', 'caname', 'host', 'flag', 'ttl'],
@@ -695,7 +695,7 @@ class BindTool(object):
             self._error('caa record must specify caname {{', command, '}}\n')
         self._validate_numeric(params, command, 'flag')
 
-        return self._caa_rr(params, params['host'], params['flag'], params['tag'], params['caname'])
+        return self._caa_rr(params, params['flag'], params['tag'], params['caname'])
 
     def dkim_record(self, params, command, zone_name):
         params = self._parse_params('dkim', params, ['selector', 'domain', 'host', 'ttl'],
