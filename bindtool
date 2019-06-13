@@ -406,7 +406,6 @@ class BindTool(object):
         return output
 
     def _generic_rr(self, params, type, value):
-        value = value.encode()
         return '{host}{ttl}\tTYPE{type}\t\\# {len} {data}\n'.format(type=type, len=len(value), data=self._wrap(self._hex(value)), **params)
 
     def _txt_rr(self, params, host, data, length=80, threshold=100):
@@ -684,7 +683,7 @@ class BindTool(object):
         return output
 
     def _caa_rr(self, params, flag, tag, caname):
-        return self._generic_rr(params, 257, chr(int(flag)) + chr(len(tag)) + tag + caname)
+        return self._generic_rr(params, 257, int(flag).to_bytes(1, byteorder='big') + len(tag).to_bytes(1, byteorder='big') + tag.encode('ascii') + caname.encode('ascii'))
 
     def caa_record(self, params, command, zone_name):
         params = self._parse_params('caa', params, ['tag', 'caname', 'host', 'flag', 'ttl'],
