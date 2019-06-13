@@ -45,7 +45,7 @@
 #       interval number of seconds
 #       percent percent of messages to apply
 #   {{pgp:key_file[:ttl]}}
-#   {{caa:tag:caname[:flag:ttl]}}
+#   {{caa:tag:caname[:host:flag:ttl]}}
 #   {{include:file_path}}
 
 
@@ -126,7 +126,7 @@ class BindTool(object):
         self.script_name = os.path.basename(__file__)
 
         argparser = argparse.ArgumentParser(description='Preprocess bind zone files')
-        argparser.add_argument('--version', action='version', version='%(prog)s 1.2.0')
+        argparser.add_argument('--version', action='version', version='%(prog)s 1.2.1')
         argparser.add_argument('zone_file_path')
         argparser.add_argument('out_file_path', nargs='?')
         argparser.add_argument('-d', '--debug',
@@ -190,7 +190,8 @@ class BindTool(object):
                     'ttl': 60
                 },
                 'caa': {
-                    'flag': 1,
+                    'host': '@',
+                    'flag': 128,
                     'ttl': None,
                 },
                 'dkim': {
@@ -686,7 +687,7 @@ class BindTool(object):
         return self._generic_rr(params, host, 257, chr(int(flag)) + chr(len(tag)) + tag + caname)
 
     def caa_record(self, params, command, zone_name):
-        params = self._parse_params('caa', params, ['tag', 'caname', 'flag', 'ttl'],
+        params = self._parse_params('caa', params, ['tag', 'caname', 'host', 'flag', 'ttl'],
                                     {}, {'ttl': '\t'}, command)
         if ('tag' not in params):
             self._error('caa record must specify tag {{', command, '}}\n')
@@ -694,7 +695,7 @@ class BindTool(object):
             self._error('caa record must specify caname {{', command, '}}\n')
         self._validate_numeric(params, command, 'flag')
 
-        return self._caa_rr(params, '@', params['flag'], params['tag'], params['caname'])
+        return self._caa_rr(params, params['host'], params['flag'], params['tag'], params['caname'])
 
     def dkim_record(self, params, command, zone_name):
         params = self._parse_params('dkim', params, ['selector', 'domain', 'host', 'ttl'],
