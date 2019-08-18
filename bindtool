@@ -91,6 +91,7 @@ import base64
 import binascii
 import collections
 import datetime
+import glob
 import hashlib
 import json
 import os
@@ -100,6 +101,8 @@ import sys
 import unicodedata
 
 import DNS
+
+import ldap
 
 
 class BindToolError(Exception):
@@ -126,7 +129,7 @@ class BindTool(object):
         self.script_name = os.path.basename(__file__)
 
         argparser = argparse.ArgumentParser(description='Preprocess bind zone files')
-        argparser.add_argument('--version', action='version', version='%(prog)s 1.2.1')
+        argparser.add_argument('--version', action='version', version='%(prog)s 1.3.0')
         argparser.add_argument('zone_file_path')
         argparser.add_argument('out_file_path', nargs='?')
         argparser.add_argument('-d', '--debug',
@@ -151,13 +154,13 @@ class BindTool(object):
                     'expire': '14d',
                     'minimum': '10m',
                     'master_server': None,
-                    'ttl': None
+                    'ttl': None,
                 },
                 'sshfp': {
                     'host': '@',
                     'key_file': 'ssh_host',
                     'ttl': None,
-                    'type': None
+                    'type': None,
                 },
                 'tlsa': {
                     'port': 443,
@@ -167,7 +170,7 @@ class BindTool(object):
                     'proto': 'tcp',
                     'ttl': None,
                     'type': None,
-                    'pass': None
+                    'pass': None,
                 },
                 'tlsa_cert': {
                     'port': 443,
@@ -176,7 +179,7 @@ class BindTool(object):
                     'proto': 'tcp',
                     'ttl': None,
                     'type': None,
-                    'pass': None
+                    'pass': None,
                 },
                 'smimea': {
                     'host': None,
@@ -184,10 +187,10 @@ class BindTool(object):
                     'selector': 'cert',
                     'ttl': None,
                     'type': None,
-                    'pass': None
+                    'pass': None,
                 },
                 'acme': {
-                    'ttl': 60
+                    'ttl': 60,
                 },
                 'caa': {
                     'host': '@',
@@ -210,11 +213,18 @@ class BindTool(object):
                     'report_format': 'afrf',
                     'interval': 86400,
                     'percent': 100,
-                    'ttl': None
+                    'ttl': None,
                 },
                 'include': {
-                    'file': None
+                    'file': None,
                 }
+            },
+            'ldap': {
+                'url': '',
+                'user_dn': '',
+                'password': '',
+                'search_base': '',
+                'filter': '(objectClass=dNSZone)',
             },
             'directories': {
                 'certificate': '/etc/ssl/certs',
@@ -224,11 +234,11 @@ class BindTool(object):
                 'dkim': '/etc/opendkim/keys/{domain}',
                 'ssh': '/etc/ssh',
                 'acme': '/etc/ssl/challenges',
-                'include': '/etc/bind/includes'
+                'include': '/etc/bind/includes',
             },
             'key_type_suffixes': {
                 'rsa': '.rsa',
-                'ecdsa': '.ecdsa'
+                'ecdsa': '.ecdsa',
             },
             'file_names': {
                 'certificate': '{username}{name}{suffix}.pem',
@@ -240,8 +250,8 @@ class BindTool(object):
                 'acme': '{name}',
                 'include': '{name}',
                 'zone_file': '{name}',
-                'include_parent': '{name}'
-            }
+                'include_parent': '{name}',
+            },
         }
         self._cert_suffixes = {
             '': ('', '.rsa', '.ecdsa'),
@@ -297,6 +307,9 @@ class BindTool(object):
             out[key] = str(value) if (value is not None) else ''
         return out
 
+    def _ldap(self, key):
+        return self._config('ldap', key)
+
     def _directory(self, file_type):
         directory = self._config('directories', file_type, '')
         return os.path.normpath(os.path.join(os.path.dirname(self.config_file_path), directory)) if (directory) else directory
@@ -307,13 +320,13 @@ class BindTool(object):
     def _file_name(self, file_type):
         return self._config('file_names', file_type, '')
 
-    def _file_path(self, file_type, file_name, key_type=None, **kwargs):
+    def _file_path(self, file_type, file_name, key_type=None, replace_wildcard=True, **kwargs):
         if (os.path.isabs(file_name)):
             return file_name
         if (self._directory(file_type) is not None):
             directory = self._directory(file_type).format(name=file_name, key_type=key_type, suffix=self._key_type_suffix(key_type), **kwargs)
             file_name = self._file_name(file_type).format(name=file_name, key_type=key_type, suffix=self._key_type_suffix(key_type), **kwargs)
-            return os.path.join(directory, file_name.replace('*', '_'))
+            return os.path.join(directory, file_name.replace('*', '_') if (replace_wildcard) else file_name)
         return ''
 
     def _find_file(self, file_types, file_name, key_type=None, **kwargs):
@@ -321,10 +334,22 @@ class BindTool(object):
             file_types = [file_types]
         for file_type in file_types:
             if (file_type):
-                file_path = self._file_path(file_type, file_name, key_type, **kwargs)
+                file_path = os.path.expanduser(self._file_path(file_type, file_name, key_type, **kwargs))
                 if (os.path.isfile(file_path)):
                     return file_path
         return None
+
+    def _find_files(self, file_types, file_name, key_type=None, **kwargs):
+        result = []
+        if (isinstance(file_types, str)):
+            file_types = [file_types]
+        for file_type in file_types:
+            if (file_type):
+                file_paths = glob.glob(os.path.expanduser(self._file_path(file_type, file_name, key_type, replace_wildcard=False, **kwargs)))
+                for file_path in file_paths:
+                    if (os.path.isfile(file_path) and (file_path not in result)):
+                        result.append(file_path)
+        return result
 
     def _copy_defaults(self, source, target):
         for key, value in source.items():
@@ -683,7 +708,9 @@ class BindTool(object):
         return output
 
     def _caa_rr(self, params, flag, tag, caname):
-        return self._generic_rr(params, 257, int(flag).to_bytes(1, byteorder='big') + len(tag).to_bytes(1, byteorder='big') + tag.encode('ascii') + caname.encode('ascii'))
+        return self._generic_rr(params, 257,
+                                int(flag).to_bytes(1, byteorder='big') + len(tag).to_bytes(1, byteorder='big')
+                                + tag.encode('ascii') + caname.encode('ascii'))
 
     def caa_record(self, params, command, zone_name):
         params = self._parse_params('caa', params, ['tag', 'caname', 'host', 'flag', 'ttl'],
@@ -732,15 +759,46 @@ class BindTool(object):
     def pgp_record(self, params, command, zone_name):
         self._error('pgp records not yet supported\n')
 
+    def ldap_record(self, params, command, zone_name):
+        ldap_server = ldap.initialize(self._ldap('url'))
+        try:
+            ldap_server.bind_s(self._ldap('user_dn'), self._ldap('password'), ldap.AUTH_SIMPLE)
+        except Exception as error:
+            self._warn('Unable to bind to LDAP server: ', error, '\n')
+            return ''
+
+        try:
+            zones = ldap_server.search_s('zoneName={zone_name}.,{base}'.format(zone_name=zone_name, base=self._ldap('search_base')),
+                                         ldap.SCOPE_SUBTREE, filterstr=self._ldap('filter'))
+        except:
+            return ''
+
+        output = ''
+        record_type_map = {
+            'aRecord': 'A',
+            'aAAARecord': 'AAAA',
+            'tXTRecord': 'TXT',
+            'sRVRecord': 'SRV',
+            'sSHFPRecord': 'SSHFP',
+        }
+        for dn, data in zones:
+            if (data['zoneName'][0].decode('ascii') == (zone_name + '.')):
+                for record_type in record_type_map:
+                    if (record_type in data):
+                        for record in data[record_type]:
+                            output += '{relativeDomainName}\t{type}\t{record}\n'.format(relativeDomainName=data['relativeDomainName'][0].decode('ascii'),
+                                                                                        type=record_type_map[record_type], record=record.decode('ascii'))
+        return output
+
     def include(self, params, command, zone_name, zone_file_path, param_vars):
         params = self._parse_params('include', params, ['file'], {}, {}, command)
         if (not params['file']):
             self._error('Include file path not specified\n')
         hold_include_parent = self.config['directories'].get('include_parent')
         self.config['directories']['include_parent'] = os.path.dirname(os.path.realpath(zone_file_path))
-        include_file_path = self._find_file(['include_parent', 'zone_file', 'include'], params['file'])
+        include_file_paths = self._find_files(['include_parent', 'zone_file', 'include'], params['file'])
         self.config['directories']['include_parent'] = hold_include_parent
-        if (not include_file_path):
+        if (not include_file_paths):
             self._error('Include file "', params['file'], '" not found\n')
         del params['file']
         local_vars = {}
@@ -748,7 +806,14 @@ class BindTool(object):
             local_vars[key] = value
         for key, value in params.items():
             local_vars[key] = value
-        return self._process_zone_file(include_file_path, zone_name, local_vars)
+
+        output = ''
+        has_soa = False
+        for include_file_path in include_file_paths:
+            file_output, file_has_soa = self._process_zone_file(include_file_path, zone_name, local_vars)
+            output += file_output
+            has_soa = has_soa or file_has_soa
+        return output, has_soa
 
     def _append(self, output, records):
         last_line_index = output.rfind('\n')
@@ -801,6 +866,8 @@ class BindTool(object):
                             output = self._append(output, self.dmarc_record(params, command, zone_name))
                         elif ('pgp' == record):
                             output = self._append(output, self.pgp_record(params, command, zone_name))
+                        elif ('ldap' == record):
+                            output = self._append(output, self.ldap_record(params, command, zone_name))
                         elif ('include' == record):
                             include, included_soa = self.include(params, command, zone_name, zone_file_path, param_vars)
                             output = self._append(output, include)

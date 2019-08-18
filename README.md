@@ -46,6 +46,10 @@ For example, to change the default `expire` value for SOA records::
     ...
 
 
+#### LDAP
+
+The `ldap` section specifies the connection and search paramaters for LDAP records.
+
 #### Directories
 
 The `directories` section specifies the directories to find various file types in.
@@ -126,6 +130,7 @@ Additional source files can be included via the following syntax:
 The file found at `file_path` will be included in the output as though the contents of that file were included inline.
 The file path is will be searched for relative to the path of the file containing the `include` command, the primary zone file, or the configured `include` directory.
 Include files can include additional files.
+The file path may contain standard glob patterns, all files matching the pattern will be included.
 Variables defined in an include file are available for use in the file containing the `include` command at any point after the `include`.
 
 Additional named arguments may follow the include file path,
@@ -482,6 +487,16 @@ Example:
 Becomes:
 
     @   TYPE257 \# 22 010569737375656c657473656e63727970742e6f7267
+
+
+### LDAP Records
+
+LDAP records are specified as follows:
+
+    {{ldap:}}
+
+Any DNS records found in the configured LDAP server matching the current zone will be included.
+The following record types are supported: A, AAAA, TXT, SRV, and SSHFP.
 
 
 ## Sample Source Zone File

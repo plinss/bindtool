@@ -5,49 +5,49 @@
             "retry": "1h",
             "expire": "14d",
             "minimum": "10m",
-            "master_server": None,
-            "ttl": None
+            "master_server": null,
+            "ttl": null
         },
         "sshfp": {
             "host": "@",
             "key_file": "ssh_host",
-            "ttl": None,
-            "type": None
+            "ttl": null,
+            "type": null
         },
         "tlsa": {
             "port": 443,
-            "host": None,
+            "host": null,
             "usage": "pkix-ee",
             "selector": "spki",
             "proto": "tcp",
-            "ttl": None,
-            "type": None,
-            "pass": None
+            "ttl": null,
+            "type": null,
+            "pass": null
         },
         "smimea": {
-            "host": None,
+            "host": null,
             "usage": "pkix-ee",
             "selector": "cert",
-            "ttl": None,
-            "type": None,
-            "pass": None
+            "ttl": null,
+            "type": null,
+            "pass": null
         },
         "acme": {
             "ttl": 60
         },
         "caa": {
             "flag": 1,
-            "ttl": None,
+            "ttl": null,
         },
         "dkim": {
-            "host": None,
-            "ttl": None,
+            "host": null,
+            "ttl": null,
             "selector": "default",
         },
         "dmarc": {
             "policy": "none",
-            "rua": None,
-            "ruf": None,
+            "rua": null,
+            "ruf": null,
             "subdomain_policy": "none",
             "options": "any",
             "dkim_alignment": "relaxed",
@@ -55,11 +55,18 @@
             "report_format": "afrf",
             "interval": 86400,
             "percent": 100,
-            "ttl": None
+            "ttl": null
         },
         "include": {
-            "file": None
+            "file": null
         }
+    },
+    "ldap": {
+        "url": "<ldaps://ldap.example.com>",
+        "user_dn": "<uid=agent,ou=people,dc=example,dc=com>",
+        "password": "<password>",
+        "search_base": "<ou=dns,dc=example,dc=com>",
+        "filter": "(objectClass=dNSZone)"
     },
     "directories": {
         "certificate": "/etc/ssl/certs",
