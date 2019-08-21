@@ -798,7 +798,7 @@ class BindTool(object):
         self.config['directories']['include_parent'] = os.path.dirname(os.path.realpath(zone_file_path))
         include_file_paths = self._find_files(['include_parent', 'zone_file', 'include'], params['file'])
         self.config['directories']['include_parent'] = hold_include_parent
-        if (not include_file_paths):
+        if ((not include_file_paths) and ('*' not in params['file']) and ('?' not in params['file'])):
             self._error('Include file "', params['file'], '" not found\n')
         del params['file']
         local_vars = {}
