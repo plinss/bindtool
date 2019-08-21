@@ -801,6 +801,9 @@ class BindTool(object):
             except Exception as error:
                 self._error('Error reading cache file ', cache_file_path, ': ', error, '\n')
 
+        if (not self._ldap('url')):
+            self._error('No LDAP server configured\n')
+
         ldap_server = ldap.initialize(self._ldap('url'))
         try:
             ldap_server.bind_s(self._ldap('user_dn'), self._ldap('password'), ldap.AUTH_SIMPLE)
