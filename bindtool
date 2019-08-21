@@ -235,6 +235,7 @@ class BindTool(object):
                 'ssh': '/etc/ssh',
                 'acme': '/etc/ssl/challenges',
                 'include': '/etc/bind/includes',
+                'cache': '/var/local/bindtool',
             },
             'key_type_suffixes': {
                 'rsa': '.rsa',
@@ -251,6 +252,7 @@ class BindTool(object):
                 'include': '{name}',
                 'zone_file': '{name}',
                 'include_parent': '{name}',
+                'cache': '{name}.ldap'
             },
         }
         self._cert_suffixes = {
@@ -346,10 +348,37 @@ class BindTool(object):
         for file_type in file_types:
             if (file_type):
                 file_paths = glob.glob(os.path.expanduser(self._file_path(file_type, file_name, key_type, replace_wildcard=False, **kwargs)))
-                for file_path in file_paths:
+                for file_path in sorted(file_paths):
                     if (os.path.isfile(file_path) and (file_path not in result)):
                         result.append(file_path)
         return result
+
+    def _makedir(self, dir_path, chmod=None, warn=True):
+        if (not os.path.isdir(dir_path)):
+            try:
+                os.makedirs(dir_path)
+                if (chmod):
+                    if (chmod & 0o700):
+                        chmod |= 0o100
+                    if (chmod & 0o070):
+                        chmod |= 0o010
+                    if (chmod & 0o007):
+                        chmod |= 0o001
+                    try:
+                        os.chmod(dir_path, chmod)
+                    except PermissionError as error:
+                        if (warn):
+                            self._warn('Unable to set directory mode for ', dir_path, '\n', self._indent(error), '\n')
+            except Exception as error:
+                if (warn):
+                    self._warn('Unable to create directory ', dir_path, '\n', self._indent(error), '\n')
+
+    def _open_file(self, file_path, mode='r', chmod=0o666, warn=True):
+        def opener(file_path, flags):
+            return os.open(file_path, flags, mode=chmod)
+        if ((('w' in mode) or ('a' in mode)) and isinstance(file_path, str)):
+            self._makedir(os.path.dirname(file_path), chmod=chmod, warn=warn)
+        return open(file_path, mode, opener=opener)
 
     def _copy_defaults(self, source, target):
         for key, value in source.items():
@@ -759,20 +788,42 @@ class BindTool(object):
     def pgp_record(self, params, command, zone_name):
         self._error('pgp records not yet supported\n')
 
-    def ldap_record(self, params, command, zone_name):
+    def _decode_zone(self, zone):
+        return {key: [value.decode('ascii') for value in values] for key, values in zone[1].items()}
+
+    def _load_ldap_zones(self, zone_name):
+        zones = {}
+        cache_file_path = self._file_path('cache', zone_name)
+        if (os.path.isfile(cache_file_path)):
+            try:
+                with open(cache_file_path) as cache_file:
+                    zones = json.load(cache_file)
+            except Exception as error:
+                self._error('Error reading cache file ', cache_file_path, ': ', error, '\n')
+
         ldap_server = ldap.initialize(self._ldap('url'))
         try:
             ldap_server.bind_s(self._ldap('user_dn'), self._ldap('password'), ldap.AUTH_SIMPLE)
         except Exception as error:
             self._warn('Unable to bind to LDAP server: ', error, '\n')
-            return ''
+            return zones
 
         try:
             zones = ldap_server.search_s('zoneName={zone_name}.,{base}'.format(zone_name=zone_name, base=self._ldap('search_base')),
                                          ldap.SCOPE_SUBTREE, filterstr=self._ldap('filter'))
-        except:
-            return ''
+            zones = [self._decode_zone(zone) for zone in zones]
+            try:
+                with self._open_file(cache_file_path, mode='w', chmod=0o600) as cache_file:
+                    json.dump(zones, cache_file)
+            except Exception as error:
+                self._error('Unable to save ldap cache: ', error, '\n')
 
+        except:
+            pass
+        return zones
+
+    def ldap_record(self, params, command, zone_name):
+        zones = self._load_ldap_zones(zone_name)
         output = ''
         record_type_map = {
             'aRecord': 'A',
@@ -780,14 +831,15 @@ class BindTool(object):
             'tXTRecord': 'TXT',
             'sRVRecord': 'SRV',
             'sSHFPRecord': 'SSHFP',
+            'tLSARecord': 'TLSA',
         }
-        for dn, data in zones:
-            if (data['zoneName'][0].decode('ascii') == (zone_name + '.')):
+        for zone in zones:
+            if (zone['zoneName'][0] == (zone_name + '.')):
                 for record_type in record_type_map:
-                    if (record_type in data):
-                        for record in data[record_type]:
-                            output += '{relativeDomainName}\t{type}\t{record}\n'.format(relativeDomainName=data['relativeDomainName'][0].decode('ascii'),
-                                                                                        type=record_type_map[record_type], record=record.decode('ascii'))
+                    if (record_type in zone):
+                        for record in zone[record_type]:
+                            output += '{relativeDomainName}\t{type}\t{record}\n'.format(relativeDomainName=zone['relativeDomainName'][0],
+                                                                                        type=record_type_map[record_type], record=record)
         return output
 
     def include(self, params, command, zone_name, zone_file_path, param_vars):

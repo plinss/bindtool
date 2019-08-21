@@ -76,7 +76,8 @@
         "dkim": "/etc/opendkim/keys/{domain}",
         "ssh": "/etc/ssh",
         "acme": "/etc/ssl/challenges",
-        "include": "/etc/bind/includes"
+        "include": "/etc/bind/includes",
+        "cache": "/var/local/bindtool"
     },
     "key_type_suffixes": {
         "rsa": ".rsa",
@@ -90,6 +91,7 @@
         "dkim": "{selector}.private",
         "ssh": "{name}_{key_type}_key.pub",
         "acme": "{name}",
-        "include": "{name}"
+        "include": "{name}",
+        "cache": "{name}.ldap"
     }
 }
