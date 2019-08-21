@@ -830,7 +830,7 @@ class BindTool(object):
         with open(zone_file_path, 'r') as zone_file:
             input = zone_file.read()
             output = ''
-            template_regex = re.compile(r'(.*?){{(.*?)}}(.*)', re.DOTALL)
+            template_regex = re.compile(r'(.*?)(?:\{\{|\[\[)(.*?)(?:\}\}|\]\])(.*)', re.DOTALL)
             has_soa = False
             while (input and (0 < len(input))):
                 match = template_regex.match(input)
