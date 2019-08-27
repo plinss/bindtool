@@ -834,7 +834,7 @@ class BindTool(object):
             'tXTRecord': 'TXT',
             'sRVRecord': 'SRV',
             'sSHFPRecord': 'SSHFP',
-            'tLSARecord': 'TLSA',
+            'mXRecord': 'MX',
         }
         for zone in zones:
             if (zone['zoneName'][0] == (zone_name + '.')):
