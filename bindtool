@@ -825,6 +825,9 @@ class BindTool(object):
             pass
         return zones
 
+    def _escape(self, record):
+        return record.replace(';', r'\;')
+
     def ldap_record(self, params, command, zone_name):
         zones = self._load_ldap_zones(zone_name)
         output = ''
@@ -842,7 +845,7 @@ class BindTool(object):
                     if (record_type in zone):
                         for record in zone[record_type]:
                             output += '{relativeDomainName}\t{type}\t{record}\n'.format(relativeDomainName=zone['relativeDomainName'][0],
-                                                                                        type=record_type_map[record_type], record=record)
+                                                                                        type=record_type_map[record_type], record=self._escape(record))
         return output
 
     def include(self, params, command, zone_name, zone_file_path, param_vars):
