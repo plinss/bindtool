@@ -838,6 +838,14 @@ class BindTool(object):
             'sRVRecord': 'SRV',
             'sSHFPRecord': 'SSHFP',
             'mXRecord': 'MX',
+            'cNameRecord': 'CNAME',
+            'dNameRecord': 'DNAME',
+            'LocRecord': 'LOC',
+            'pTRRecord': 'PTR',
+            'nAPTRRecord': 'NAPTR',
+            'certRecord': 'CERT',
+            'dSRecord': 'DS',
+            'aFSDBRecord': 'AFSDB',
         }
         for zone in zones:
             if (zone['zoneName'][0] == (zone_name + '.')):
