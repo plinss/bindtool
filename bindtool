@@ -838,7 +838,7 @@ class BindTool(object):
             'sRVRecord': 'SRV',
             'sSHFPRecord': 'SSHFP',
             'mXRecord': 'MX',
-            'cNameRecord': 'CNAME',
+            'cNAMERecord': 'CNAME',
             'dNameRecord': 'DNAME',
             'LocRecord': 'LOC',
             'pTRRecord': 'PTR',
