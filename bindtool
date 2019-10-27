@@ -194,7 +194,7 @@ class BindTool(object):
                 },
                 'caa': {
                     'host': '@',
-                    'flag': 128,
+                    'flag': 0,
                     'ttl': None,
                 },
                 'dkim': {
