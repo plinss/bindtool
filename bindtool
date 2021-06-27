@@ -61,13 +61,13 @@ def _verify_requirements():
                 try:
                     distribution = pkg_resources.get_distribution(requirement.project_name)
                     if (distribution not in requirement):
-                        print('Package', requirement.project_name, 'version', distribution.version, 'is not supported')
+                        print(f'Package {requirement.project_name} version {distribution.version} is not supported')
                         requirements_met = False
                 except Exception:
-                    print('Package', requirement.project_name, 'is not installed')
+                    print(f'Package {requirement.project_name} is not installed')
                     requirements_met = False
         if (not requirements_met):
-            print('Run "pip3 install -r {path}" to complete installation'.format(path=requirements_file_path))
+            print(f'Run "pip3 install -r {requirements_file_path}" to complete installation')
             exit()
 
 
@@ -94,10 +94,14 @@ import ldap
 
 
 class BindToolError(Exception):
+    """General error."""
+
     pass
 
 
-class BindTool(object):
+class BindTool:
+    """Bind9 zone file processor."""
+
     @classmethod
     def Run(cls):
         tool = None
@@ -240,7 +244,7 @@ class BindTool(object):
                 'include': '{name}',
                 'zone_file': '{name}',
                 'include_parent': '{name}',
-                'cache': '{name}.ldap'
+                'cache': '{name}.ldap',
             },
         }
         self._cert_suffixes = {
