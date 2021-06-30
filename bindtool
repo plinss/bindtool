@@ -87,6 +87,7 @@ import re
 import subprocess
 import sys
 import unicodedata
+from collections import abc
 
 import DNS
 
@@ -137,7 +138,8 @@ class BindTool:
         if (self.args.debug):
             sys.excepthook = debug_hook
 
-        self.config, self.config_file_path = self._load_config(self.args.config_path, ('.', os.path.join('/etc', self.script_name), script_dir))
+        zone_name = os.path.basename(self.args.zone_file_path)
+        self.config, self.config_dir = self._load_config(self.args.config_path, ('.', os.path.join('/etc', self.script_name), script_dir), zone_name)
         self._config_defaults = {
             'defaults': {
                 'soa': {
@@ -261,17 +263,43 @@ class BindTool:
         self.certificates = {}
         self.public_keys = {}
 
-    def _load_config(self, file_path, search_paths=[]):
+    def _zone_config_file_path(self, config_file_path, zone_name):
+        config_dir, config_filename = os.path.split(config_file_path)
+        if ('.' in config_filename):
+            name, extension = config_filename.rsplit('.', 1)
+            return os.path.join(config_dir, f'{name}.{zone_name}.{extension}')
+        return os.path.join(config_dir, f'{name}.{zone_name}')
+
+    def _merge_config(self, base, extra):
+        if (base is None):
+            base = collections.OrderedDict()
+        for name, value in extra.items():
+            if (isinstance(value, abc.Mapping)):
+                base[name] = self._merge_config(base.get(name), value)
+            else:
+                base[name] = value
+        return base
+
+    def _load_config_file(self, config_file_path):
+        if (os.path.isfile(config_file_path)):
+            try:
+                with open(config_file_path) as config_file:
+                    return json.load(config_file, object_pairs_hook=collections.OrderedDict)
+            except Exception as error:
+                self._error('Error reading config file ', config_file_path, ': ', error, '\n')
+        return {}
+
+    def _load_config(self, file_path, search_paths, zone_name):
         search_paths = [''] if (os.path.isabs(file_path)) else search_paths
-        for search_path in search_paths:
+        for search_path in reversed(search_paths):
             config_file_path = os.path.join(search_path, file_path)
-            if (os.path.isfile(config_file_path)):
-                try:
-                    with open(config_file_path) as config_file:
-                        return (json.load(config_file, object_pairs_hook=collections.OrderedDict), os.path.abspath(config_file_path))
-                except Exception as error:
-                    self._error('Error reading config file ', config_file_path, ': ', error, '\n')
-        return (collections.OrderedDict(), '')
+            zone_config_file_path = self._zone_config_file_path(config_file_path, zone_name)
+            if (os.path.isfile(config_file_path) or os.path.isfile(zone_config_file_path)):
+                config = None
+                config = self._merge_config(config, self._load_config_file(config_file_path))
+                config = self._merge_config(config, self._load_config_file(zone_config_file_path))
+                return (config, os.path.dirname(os.path.abspath(config_file_path)))
+        return (config, '')
 
     def _message(self, *args):
         message = ''
@@ -306,7 +334,7 @@ class BindTool:
 
     def _directory(self, file_type):
         directory = self._config('directories', file_type, '')
-        return os.path.normpath(os.path.join(os.path.dirname(self.config_file_path), directory)) if (directory) else directory
+        return os.path.normpath(os.path.join(self.config_dir, directory)) if (directory) else directory
 
     def _key_type_suffix(self, key_type):
         return self._config('key_type_suffixes', key_type, '')

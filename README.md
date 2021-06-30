@@ -32,6 +32,9 @@ it will be searched for in the same locations,
 e.g. `bindtool --config config.json` will load `./config.json`, `/etc/bindtool/config.json`, or `<install-dir>/config.json`.
 The file must adhere to standard JSON format.
 
+Zone-specific config files may be placed along side the config file with the name `bindtoool.<zone-name>.json`.
+If present, values in a zone-specific config file will override those in the config file when processing that zone.
+
 #### Defaults
 
 The `defaults` section specifies the default values for all of the arguments for the various record commands.
