@@ -845,9 +845,6 @@ class BindTool:
             pass
         return zones
 
-    def _escape(self, record):
-        return record.replace(';', r'\;')
-
     def ldap_record(self, params, command, zone_name):
         zones = self._load_ldap_zones(zone_name)
         output = ''
@@ -867,13 +864,18 @@ class BindTool:
             'dSRecord': 'DS',
             'aFSDBRecord': 'AFSDB',
         }
+        def _record(record_type, host, data):
+            if ('TXT' == record_type):
+                return self._txt_rr({'ttl': ''}, host, data)
+            data = data.replace(';', r'\;')
+            return f"{host}\t{record_type}\t{data}\n"
+
         for zone in zones:
             if (zone['zoneName'][0] == (zone_name + '.')):
                 for record_type in record_type_map:
                     if (record_type in zone):
                         for record in zone[record_type]:
-                            output += '{relativeDomainName}\t{type}\t{record}\n'.format(relativeDomainName=zone['relativeDomainName'][0],
-                                                                                        type=record_type_map[record_type], record=self._escape(record))
+                            output += _record(record_type_map[record_type], zone['relativeDomainName'][0], record)
         return output
 
     def include(self, params, command, zone_name, zone_file_path, param_vars):
