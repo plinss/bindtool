@@ -9,13 +9,11 @@ This greatly simplifies keeping DNS zones current when keys change as no zone fi
 
 ## Installation
 
-Requires Python3.4+ and the py3dns package.
-py3dns can be installed via:
+Requires Python3.7+.
 
-    sudo pip3 install -r requirements.txt
+    sudo pip3 install bindtool
 
-Clone this repository or download the `bindtool` file and install it on your master DNS server.
-Optionally copy the `bindtool.example.json` file to `bindtool.json` in the installed directory and edit the configuration options.
+Optionally create a virtual environment and install there.
 
 
 ### Configuration

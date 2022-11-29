@@ -28,4 +28,4 @@ local/*
 *.zip
 etc/*
 var/*
-bindtool*.json
+bindtool.json

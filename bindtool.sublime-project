@@ -1,0 +1,35 @@
+{
+	"folders":
+	[
+		{
+			"path": "."
+		}
+	],
+    "settings": {
+        "default_encoding": "utf-8",
+        "fallback_encoding": "utf-8",
+        "default_line_ending": "unix",
+        "trim_trailing_white_space_on_save": true,
+        "tab_size": 4,
+        "translate_tabs_to_spaces": true,
+        "trim_automatic_white_space": true,
+        "indent_to_bracket": true,
+        "rulers": [160],
+        "flake8lint": {
+			"python_interpreter": "/opt/local/bin/python3",
+            "builtins": [],
+            "pyflakes": true,
+            "pep8": true,
+            "pydocstyle": false,
+            "naming": true,
+            "debugger": false,
+            "import-order": true,
+            "import-order-style": "pep8",
+            "complexity": -1,
+            "pep8_max_line_length": 160,
+            "select": [],
+            "ignore": ["W503", "N802", "E402"],
+            "ignore_files": []
+        }
+    }
+}

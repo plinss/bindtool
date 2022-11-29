@@ -49,31 +49,6 @@
 #   {{include:file_path}}
 
 
-def _verify_requirements():
-    import os
-    import pkg_resources
-    requirements_file_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'requirements.txt')
-    if (os.path.exists(requirements_file_path)):
-        requirements_met = True
-        with open(requirements_file_path, 'r') as requirements_file:
-            requirements = [line for line in requirements_file.read().split('\n') if (not line.strip().startswith('-'))]
-            for requirement in pkg_resources.parse_requirements(requirements):
-                try:
-                    distribution = pkg_resources.get_distribution(requirement.project_name)
-                    if (distribution not in requirement):
-                        print(f'Package {requirement.project_name} version {distribution.version} is not supported')
-                        requirements_met = False
-                except Exception:
-                    print(f'Package {requirement.project_name} is not installed')
-                    requirements_met = False
-        if (not requirements_met):
-            print(f'Run "pip3 install -r {requirements_file_path}" to complete installation')
-            exit()
-
-
-_verify_requirements()
-
-
 import argparse
 import base64
 import binascii
@@ -88,6 +63,7 @@ import subprocess
 import sys
 import unicodedata
 from collections import abc
+from importlib import metadata
 
 import DNS
 
@@ -103,33 +79,20 @@ class BindToolError(Exception):
 class BindTool:
     """Bind9 zone file processor."""
 
-    @classmethod
-    def Run(cls):
-        tool = None
-        try:
-            tool = cls()
-            tool.run()
-        except BindToolError:
-            pass
-        if (tool):
-            try:
-                del tool
-            except Exception:
-                pass
-
     def __init__(self):
-        script_dir = os.path.dirname(os.path.realpath(__file__))
-        self.script_name = os.path.basename(__file__)
+        script_entry = sys.argv[0]
+        self.script_dir = os.path.dirname(os.path.realpath(script_entry))
+        self.script_name = os.path.basename(script_entry)
 
         argparser = argparse.ArgumentParser(description='Preprocess bind zone files')
-        argparser.add_argument('--version', action='version', version='%(prog)s 1.3.0')
+        argparser.add_argument('--version', action='version', version='%(prog)s ' + metadata.version('bindtool'))
         argparser.add_argument('zone_file_path')
         argparser.add_argument('out_file_path', nargs='?')
         argparser.add_argument('-d', '--debug',
                                action='store_true', dest='debug', default=False,
                                help='print detailed debugging information to stdout')
         argparser.add_argument('-c', '--config',
-                               dest='config_path', default=(self.script_name + '.json'), metavar='CONFIG_PATH',
+                               dest='config_path', default=f'{self.script_name}.json', metavar='CONFIG_PATH',
                                help='Specify file path for config')
         self.args = argparser.parse_args()
         if (not self.args.zone_file_path):
@@ -139,7 +102,7 @@ class BindTool:
             sys.excepthook = debug_hook
 
         zone_name = os.path.basename(self.args.zone_file_path)
-        self.config, self.config_dir = self._load_config(self.args.config_path, ('.', os.path.join('/etc', self.script_name), script_dir), zone_name)
+        self.config, self.config_dir = self._load_config(self.args.config_path, ('.', os.path.join('/etc', self.script_name), self.script_dir), zone_name)
         self._config_defaults = {
             'defaults': {
                 'soa': {
@@ -1016,7 +979,3 @@ def debug_hook(type, value, tb):
         print()
         # ...then start the debugger in post-mortem mode.
         pdb.pm()
-
-
-if __name__ == '__main__':      # called from the command line
-    BindTool.Run()
