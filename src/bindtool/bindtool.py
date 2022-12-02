@@ -583,6 +583,7 @@ class BindTool:
             params['admin'] += '.'
 
         master_server = params['master_server'] if (params['master_server']) else params['primary_server']
+        existing_serial = 0
         try:
             response = DNS.Request().req(server=master_server, name=zone_name, qtype='SOA')
             existing_serial = response.answers[0]['data'][2][1] if (response and ('NOERROR' == response.header['status'])) else 0
