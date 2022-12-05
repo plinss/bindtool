@@ -1,36 +1,53 @@
 ---
-image: python:3.7
+image: python:3.7-bullseye
+
+
+.setup:
+  before_script:
+    - source .gitlab-ci.env
+
+
+.depends:
+  before_script:
+    - apt-get update
+    - apt-get install --yes ${DEPENDS}
+  rules:
+    - if: ${DEPENDS}
 
 
 stages:
+  - lint
   - test
   - package
   - deploy
 
 
-# flake8:
-#   stage: lint
-#   before_script:
-#     - source .gitlab-ci.env
-#     - pip install -e ".[dev]"
-#   script:
-#     - flake8 ${PACKAGE_NAME}
+flake8:
+  stage: lint
+  before_script:
+    - !reference [.setup, before_script]
+    - !reference [.depends, before_script]
+    - pip install -e ".[dev]"
+  script:
+    - flake8 src
 
 
-# mypy:
-#   stage: lint
-#   before_script:
-#     - source .gitlab-ci.env
-#     - pip install -e ".[dev]"
-#   script:
-#     - mypy ${PACKAGE_NAME}
+mypy:
+  stage: lint
+  before_script:
+    - !reference [.setup, before_script]
+    - !reference [.depends, before_script]
+    - pip install -e ".[dev]"
+  script:
+    - mypy src
 
 
 test_3.7:
   stage: test
-  image: python:3.7
+  image: python:3.7-bullseye
   before_script:
-    - source .gitlab-ci.env
+    - !reference [.setup, before_script]
+    - !reference [.depends, before_script]
     - pip install -e ".[test]"
     - chmod a+x test.py
   script:
@@ -42,9 +59,10 @@ test_3.7:
 
 test_3.8:
   stage: test
-  image: python:3.8
+  image: python:3.8-bullseye
   before_script:
-    - source .gitlab-ci.env
+    - !reference [.setup, before_script]
+    - !reference [.depends, before_script]
     - pip install -e ".[test]"
     - chmod a+x test.py
   script:
@@ -56,9 +74,10 @@ test_3.8:
 
 test_3.9:
   stage: test
-  image: python:3.9
+  image: python:3.9-bullseye
   before_script:
-    - source .gitlab-ci.env
+    - !reference [.setup, before_script]
+    - !reference [.depends, before_script]
     - pip install -e ".[test]"
     - chmod a+x test.py
   script:
@@ -70,9 +89,10 @@ test_3.9:
 
 test_3.10:
   stage: test
-  image: python:3.10
+  image: python:3.10-bullseye
   before_script:
-    - source .gitlab-ci.env
+    - !reference [.setup, before_script]
+    - !reference [.depends, before_script]
     - pip install -e ".[test]"
     - chmod a+x test.py
   script:
@@ -84,9 +104,10 @@ test_3.10:
 
 test_3.11:
   stage: test
-  image: python:3.11
+  image: python:3.11-bullseye
   before_script:
-    - source .gitlab-ci.env
+    - !reference [.setup, before_script]
+    - !reference [.depends, before_script]
     - pip install -e ".[test]"
     - chmod a+x test.py
   script:
@@ -111,7 +132,7 @@ package:
 deploy:
   stage: deploy
   before_script:
-    - source .gitlab-ci.env
+    - !reference [.setup, before_script]
     - pip install --upgrade wheel twine
   script:
     - python -m twine upload --username __token__ --password ${PYPI_API_TOKEN} --non-interactive --disable-progress-bar --repository-url ${PYPI_REPOSITORY_URL} dist/*

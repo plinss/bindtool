@@ -1,59 +1,11 @@
-#!/usr/bin/env python3
+"""BindTool does variable substitution and generates special Resource Records."""
 
-# This tool does variable substitution and generates special Resource Records
-#
-# To install on Debian:
-# sudo pip3 install -r requirements.txt
-#
-# To define a variable: {{varname=value}}
-# To use a variable: {{varname}}
-# To create a special Resource Record: {{type:param1:param2:...}}
-#   optional params may be identified by keyword, e.g.: {{type:param1:param4name=value}}
-#
-# Special Resource Records available are:
-#   {{soa:primary_server:admin[:refresh:retry:expire:minimum:master_server:ttl]}}
-#       defaults are: refresh=4h, retry=1h, expire=14d, minimum=10m
-#   {{sshfp:[hostname:key_file:ttl:type]}}
-#       key_file defaults to 'ssh_host', if not abs path, looks in /etc/ssh
-#       key_file must not include _<type>_key.pub
-#   {{tlsa:port[:host:cert_file:usage:selector:proto:ttl:type:pass]}
-#       if cert_file not abs path, looks in /etc/ssl/certs
-#       proto defaults to tcp
-#       usage one of pkix-ta, pkix-ee, dane-ta, dane-ee - defaults to pkix-ee
-#       selector one of cert, spki - defaults to spki
-#   {{tlsa_cert:port[:cert_file:usage:selector:proto:ttl:type]}
-#       if cert_file not abs path, looks in /etc/ssl/certs
-#       proto defaults to tcp
-#       usage one of pkix-ta, pkix-ee, dane-ta, dane-ee - defaults to pkix-ee
-#       selector one of cert, spki - defaults to spki
-#   {{smimea:user[:host:cert_file:usage:selector:ttl:type:pass}}
-#       if cert_file not abs path, looks in /etc/ssl/certs
-#       usage one of pkix-ta, pkix-ee, dane-ta, dane-ee - defaults to pkix-ee
-#       selector one of cert, spki - defaults to cert
-#   {{acme:[challenge_file:ttl]}}
-#       if challenge_file not abs path, looks in /etc/ssl/challenges
-#   {{dkim:[selector:domain:host:ttl]}}
-#   {{dmarc:[policy:rua:ruf:subdomain_policy:options:dkim_alignment:spf_alignment:report_format:interval:percent:ttl]}}
-#       policy defaults to none, one of none, quarantine, reject
-#       rua email adresses to send aggregate reports (comma separated)
-#       ruf email adresses to send forensic reports (comma separated)
-#       subdomain_policy one of none, quarantine, reject
-#       options one of all, any, dkim, spf
-#       dkim_alignment one of strict or relaxed
-#       spf_alignment one of strict or relaxed
-#       report_format one of afrf or iodef
-#       interval number of seconds
-#       percent percent of messages to apply
-#   {{pgp:key_file[:ttl]}}
-#   {{caa:tag:caname[:host:flag:ttl]}}
-#   {{include:file_path}}
-
+from __future__ import annotations
 
 import argparse
 import base64
 import binascii
 import collections
-import datetime
 import glob
 import hashlib
 import json
@@ -62,12 +14,27 @@ import re
 import subprocess
 import sys
 import unicodedata
-from collections import abc
-from importlib import metadata
+from collections.abc import Mapping
+from datetime import datetime, timezone
+from typing import Any, IO, NoReturn, TYPE_CHECKING, cast
 
 import DNS
 
 import ldap
+
+if (TYPE_CHECKING):
+    from collections.abc import Collection, Sequence
+    from types import TracebackType
+
+
+def module_version(module: str) -> str:
+    """Get version of installed module."""
+    try:
+        from importlib.metadata import version
+        return version(module)
+    except ModuleNotFoundError:
+        from pkg_resources import get_distribution
+        return get_distribution(module).version
 
 
 class BindToolError(Exception):
@@ -79,13 +46,24 @@ class BindToolError(Exception):
 class BindTool:
     """Bind9 zone file processor."""
 
-    def __init__(self):
+    script_dir: str
+    script_name: str
+    config: dict[str, Any]
+    config_dir: str
+    _config_defaults: Mapping[str, Any]
+    _cert_suffixes: Mapping[str, Sequence[str]]
+    _key_suffixes: Mapping[str, Sequence[str]]
+    certificates: dict[str, (bytes | None)]
+    public_keys: dict[str, (bytes | None)]
+    vars: dict[str, str]
+
+    def __init__(self) -> None:
         script_entry = sys.argv[0]
         self.script_dir = os.path.dirname(os.path.realpath(script_entry))
         self.script_name = os.path.basename(script_entry)
 
         argparser = argparse.ArgumentParser(description='Preprocess bind zone files')
-        argparser.add_argument('--version', action='version', version='%(prog)s ' + metadata.version('bindtool'))
+        argparser.add_argument('--version', action='version', version='%(prog)s ' + module_version('bindtool'))
         argparser.add_argument('zone_file_path')
         argparser.add_argument('out_file_path', nargs='?')
         argparser.add_argument('-d', '--debug',
@@ -174,7 +152,7 @@ class BindTool:
                 },
                 'include': {
                     'file': None,
-                }
+                },
             },
             'ldap': {
                 'url': '',
@@ -215,44 +193,44 @@ class BindTool:
         self._cert_suffixes = {
             '': ('', '.rsa', '.ecdsa'),
             'rsa': ('', '.rsa'),
-            'ecdsa': ('.ecdsa')
+            'ecdsa': ('.ecdsa'),
         }
         self._key_suffixes = {
             '': ('', '.rsa', '.ecdsa', '_backup', '_backup.rsa', '_backup.ecdsa', '_previous', '_previous.rsa', '_previous.ecdsa'),
             'rsa': ('', '.rsa', '_backup', '_backup.rsa', '_previous', '_previous.rsa'),
-            'ecdsa': ('.ecdsa', '_backup.ecdsa', '_previous.ecdsa')
+            'ecdsa': ('.ecdsa', '_backup.ecdsa', '_previous.ecdsa'),
         }
 
         self.certificates = {}
         self.public_keys = {}
 
-    def _zone_config_file_path(self, config_file_path, zone_name):
+    def _zone_config_file_path(self, config_file_path: str, zone_name: str) -> str:
         config_dir, config_filename = os.path.split(config_file_path)
         if ('.' in config_filename):
             name, extension = config_filename.rsplit('.', 1)
             return os.path.join(config_dir, f'{name}.{zone_name}.{extension}')
         return os.path.join(config_dir, f'{name}.{zone_name}')
 
-    def _merge_config(self, base, extra):
+    def _merge_config(self, base: (dict[str, Any] | None), extra: Mapping[str, Any]) -> dict[str, Any]:
         if (base is None):
             base = collections.OrderedDict()
         for name, value in extra.items():
-            if (isinstance(value, abc.Mapping)):
+            if (isinstance(value, Mapping)):
                 base[name] = self._merge_config(base.get(name), value)
             else:
                 base[name] = value
         return base
 
-    def _load_config_file(self, config_file_path):
+    def _load_config_file(self, config_file_path: str) -> dict[str, Any]:
         if (os.path.isfile(config_file_path)):
             try:
                 with open(config_file_path) as config_file:
-                    return json.load(config_file, object_pairs_hook=collections.OrderedDict)
+                    return json.load(config_file)
             except Exception as error:
                 self._error('Error reading config file ', config_file_path, ': ', error, '\n')
         return {}
 
-    def _load_config(self, file_path, search_paths, zone_name):
+    def _load_config(self, file_path: str, search_paths: Sequence[str], zone_name: str) -> tuple[dict[str, Any], str]:
         search_paths = [''] if (os.path.isabs(file_path)) else search_paths
         for search_path in reversed(search_paths):
             config_file_path = os.path.join(search_path, file_path)
@@ -262,50 +240,53 @@ class BindTool:
                 config = self._merge_config(config, self._load_config_file(config_file_path))
                 config = self._merge_config(config, self._load_config_file(zone_config_file_path))
                 return (config, os.path.dirname(os.path.abspath(config_file_path)))
-        return (config, '')
+        return ({}, '')
 
-    def _message(self, *args):
+    def _message(self, *args) -> str:
         message = ''
         for arg in args:
             message += str(arg, 'utf-8', 'replace') if isinstance(arg, bytes) else str(arg)
         return message
 
-    def _debug(self, *args):
+    def _indent(self, *args) -> str:
+        return '\n'.join([('    ' + line) for line in self._message(*args).split('\n')])
+
+    def _debug(self, *args) -> None:
         if (self.args.debug):
             sys.stdout.write(self._message(*args))
 
-    def _warn(self, *args):
+    def _warn(self, *args) -> None:
         sys.stderr.write('WARNING: ' + self._message(*args))
 
-    def _error(self, *args):
+    def _error(self, *args) -> NoReturn:
         message = self._message(*args)
         sys.stderr.write('ERROR: ' + message)
         raise BindToolError(message)
 
-    def _config(self, section_name, key=None, default=None):
+    def _config(self, section_name: str, key: (str | None) = None, default: (str | int | Mapping[str, Any] | None) = None) -> (str | int | Mapping[str, Any]):
         return self.config.get(section_name, {}).get(key, default) if (key) else self.config.get(section_name, {})
 
-    def _defaults(self, type, fill={}):
-        out = fill
-        defaults = self._config('defaults', type, {})
+    def _defaults(self, type: str, fill: (Mapping[str, Any] | None) = None) -> dict[str, Any]:
+        out: dict[str, Any] = (dict(fill) if (fill) else {})
+        defaults = cast(dict, self._config('defaults', type, {}))
         for key, value in defaults.items():
             out[key] = str(value) if (value is not None) else ''
         return out
 
-    def _ldap(self, key):
-        return self._config('ldap', key)
+    def _ldap(self, key: str) -> str:
+        return cast(str, self._config('ldap', key))
 
-    def _directory(self, file_type):
-        directory = self._config('directories', file_type, '')
+    def _directory(self, file_type: str) -> str:
+        directory = cast(str, self._config('directories', file_type, ''))
         return os.path.normpath(os.path.join(self.config_dir, directory)) if (directory) else directory
 
-    def _key_type_suffix(self, key_type):
-        return self._config('key_type_suffixes', key_type, '')
+    def _key_type_suffix(self, key_type: (str | None)) -> str:
+        return cast(str, self._config('key_type_suffixes', key_type, ''))
 
-    def _file_name(self, file_type):
-        return self._config('file_names', file_type, '')
+    def _file_name(self, file_type: str) -> str:
+        return cast(str, self._config('file_names', file_type, ''))
 
-    def _file_path(self, file_type, file_name, key_type=None, replace_wildcard=True, **kwargs):
+    def _file_path(self, file_type: str, file_name: str, key_type: (str | None) = None, replace_wildcard: bool = True, **kwargs) -> str:
         if (os.path.isabs(file_name)):
             return file_name
         if (self._directory(file_type) is not None):
@@ -314,7 +295,7 @@ class BindTool:
             return os.path.join(directory, file_name.replace('*', '_') if (replace_wildcard) else file_name)
         return ''
 
-    def _find_file(self, file_types, file_name, key_type=None, **kwargs):
+    def _find_file(self, file_types: (str | Sequence[str]), file_name: str, key_type: (str | None) = None, **kwargs) -> (str | None):
         if (isinstance(file_types, str)):
             file_types = [file_types]
         for file_type in file_types:
@@ -324,7 +305,7 @@ class BindTool:
                     return file_path
         return None
 
-    def _find_files(self, file_types, file_name, key_type=None, **kwargs):
+    def _find_files(self, file_types: (str | Sequence[str]), file_name: str, key_type: (str | None) = None, **kwargs) -> Sequence[str]:
         result = []
         if (isinstance(file_types, str)):
             file_types = [file_types]
@@ -336,7 +317,7 @@ class BindTool:
                         result.append(file_path)
         return result
 
-    def _makedir(self, dir_path, chmod=None, warn=True):
+    def _makedir(self, dir_path: str, chmod: (int | None) = None, warn: bool = True) -> None:
         if (not os.path.isdir(dir_path)):
             try:
                 os.makedirs(dir_path)
@@ -356,22 +337,22 @@ class BindTool:
                 if (warn):
                     self._warn('Unable to create directory ', dir_path, '\n', self._indent(error), '\n')
 
-    def _open_file(self, file_path, mode='r', chmod=0o666, warn=True):
-        def opener(file_path, flags):
+    def _open_file(self, file_path: str, mode: str = 'r', chmod: int = 0o666, warn: bool = True) -> IO:
+        def opener(file_path: str, flags: int) -> int:
             return os.open(file_path, flags, mode=chmod)
         if ((('w' in mode) or ('a' in mode)) and isinstance(file_path, str)):
             self._makedir(os.path.dirname(file_path), chmod=chmod, warn=warn)
         return open(file_path, mode, opener=opener)
 
-    def _copy_defaults(self, source, target):
+    def _copy_defaults(self, source: Mapping[str, Any], target: dict[str, Any]) -> None:
         for key, value in source.items():
             if (key not in target):
-                target[key] = source[key]
+                target[key] = value
             else:
                 if (isinstance(source[key], dict) and isinstance(target[key], collections.OrderedDict)):
                     self._copy_defaults(source[key], target[key])
 
-    def _validate_config(self, zone_file_path):
+    def _validate_config(self, zone_file_path: str) -> None:
         if ('directories' not in self.config):
             self.config['directories'] = collections.OrderedDict()
         for legacy_directory in ['certificate_path', 'private_key_path', 'backup_key_path', 'previous_key_path',
@@ -382,7 +363,7 @@ class BindTool:
         self._copy_defaults(self._config_defaults, self.config)
         self.config['directories']['zone_file'] = os.path.dirname(os.path.realpath(zone_file_path))
 
-    def _split_command(self, command):
+    def _split_command(self, command: str) -> tuple[str, list[tuple[str, str]]]:
         parts = []
         name = ''
         value = ''
@@ -413,10 +394,12 @@ class BindTool:
         parts.append((name.strip(), value.strip()))
         return (parts[0][1], parts[1:])
 
-    def _parse_params(self, type, params, names, defaults, prefixes, command):
+    def _parse_args(self, type: str, args: list[tuple[str, str]], param_names: Sequence[str],
+                    defaults: Mapping[str, str], prefixes: Mapping[str, str], command: str) -> dict[str, str]:
         out = self._defaults(type, defaults)
-        while (0 < len(params)):
-            name, value = params.pop(0)
+        names = list(param_names)
+        while (0 < len(args)):
+            name, value = args.pop(0)
             if (name):
                 if (name in names):
                     names.remove(name)
@@ -432,7 +415,7 @@ class BindTool:
                 out[name] = prefixes[name] + out[name]
         return out
 
-    def _wrap(self, value, length=80, threshold=100):
+    def _wrap(self, value: str, length: int = 80, threshold: int = 100) -> str:
         if (len(value) <= threshold):
             return value
         output = '(\n'
@@ -442,12 +425,12 @@ class BindTool:
         output += '\t)'
         return output
 
-    def _generic_rr(self, params, type, value):
-        return '{host}{ttl}\tTYPE{type}\t\\# {len} {data}\n'.format(type=type, len=len(value), data=self._wrap(self._hex(value)), **params)
+    def _generic_rr(self, params: Mapping[str, str], type: int, value: bytes) -> str:
+        return '{host}{ttl}\tTYPE{type}\t\\# {len} {data}\n'.format(type=type, len=len(value), data=self._wrap(self._hex(value)), **params)  # noqa: FS002
 
-    def _txt_rr(self, params, host, data, length=80, threshold=100):
+    def _txt_rr(self, params: dict[str, str], host: str, data: str, length: int = 80, threshold: int = 100) -> str:
         params['host'] = host
-        output = '{host}{ttl}\tTXT\t'.format(**params)
+        output = '{host}{ttl}\tTXT\t'.format(**params)  # noqa: FS002
         if (len(data) <= min(255, threshold)):
             return output + '"' + data + '"\n'
         length = min(255, length)
@@ -458,20 +441,20 @@ class BindTool:
         output += '\t)\n'
         return output
 
-    def _hex(self, value):
+    def _hex(self, value: bytes) -> str:
         return binascii.hexlify(value).decode('ascii')
 
-    def _sha1(self, value):
+    def _sha1(self, value: bytes) -> str:
         return hashlib.sha1(value).hexdigest()
 
-    def _sha256(self, value):
+    def _sha256(self, value: bytes) -> str:
         return hashlib.sha256(value).hexdigest()
 
-    def _sha512(self, value):
+    def _sha512(self, value: bytes) -> str:
         return hashlib.sha512(value).hexdigest()
 
-    def _load_certificates(self, cert_file_name, type, username=''):
-        certificates = []
+    def _load_certificates(self, cert_file_name: str, type: str, username: str = '') -> Sequence[bytes]:
+        certificates: list[bytes] = []
         username = (username + '@') if (username) else username
         key_types = [type] if (type) else ['rsa', 'ecdsa']
 
@@ -479,37 +462,38 @@ class BindTool:
             cert_file_path = self._find_file('certificate', cert_file_name, key_type=key_type, username=username)
             if (cert_file_path):
                 if (cert_file_path in self.certificates):
-                    certificates.append(self.certificates[cert_file_path])
+                    certificate = self.certificates[cert_file_path]
                 else:
                     self._debug('Loading certificate ', cert_file_path, '\n')
                     certificate = subprocess.check_output(['openssl', 'x509', '-in', cert_file_path, '-outform', 'DER'])
                     self.certificates[cert_file_path] = certificate
+                if (certificate):
                     certificates.append(certificate)
         if (not certificates):
             self._warn('Certificate file ', cert_file_name, ' not found\n')
         return certificates
 
-    def _extract_public_key(self, public_key_pem):
+    def _extract_public_key(self, public_key_pem: bytes) -> (bytes | None):
         if (public_key_pem):
             match = re.match(r'-----BEGIN PUBLIC KEY-----(.*?)-----END PUBLIC KEY-----', public_key_pem.decode('ascii'), re.DOTALL)
             if (match):
                 return base64.b64decode(match.group(1))
         return None
 
-    def _public_key_from_certificate(self, cert_file_path):
+    def _public_key_from_certificate(self, cert_file_path: str) -> (bytes | None):
         return self._extract_public_key(subprocess.check_output(['openssl', 'x509', '-in', cert_file_path, '-pubkey', '-noout']))
 
-    def _public_key_from_private_key(self, private_key_path, passphrase):
-        pass_arg = ['-passin', 'pass:{passphrase}'.format(passphrase=passphrase)] if (passphrase) else []
+    def _public_key_from_private_key(self, private_key_path: str, passphrase: str) -> (bytes | None):
+        pass_arg = ['-passin', f'pass:{passphrase}'] if (passphrase) else []
         try:
             return self._extract_public_key(subprocess.check_output(['openssl', 'rsa', '-in', private_key_path, '-pubout'] + pass_arg,
                                                                     stderr=subprocess.DEVNULL))
-        except:
+        except Exception:
             return self._extract_public_key(subprocess.check_output(['openssl', 'ec', '-in', private_key_path, '-pubout'] + pass_arg,
                                                                     stderr=subprocess.DEVNULL))
 
-    def _load_public_keys(self, cert_file_name, type, passphrase, username=''):
-        public_keys = []
+    def _load_public_keys(self, cert_file_name: str, type: str, passphrase: str, username: str = '') -> Sequence[bytes]:
+        public_keys: list[bytes] = []
         username = (username + '@') if (username) else username
         key_types = [type] if (type) else ['rsa', 'ecdsa']
 
@@ -517,31 +501,33 @@ class BindTool:
             cert_file_path = self._find_file('certificate', cert_file_name, key_type=key_type, username=username)
             if (cert_file_path):
                 if (cert_file_path in self.public_keys):
-                    public_keys.append(self.public_keys[cert_file_path])
+                    public_key = self.public_keys[cert_file_path]
                 else:
                     self._debug('Loading public key from certificate ', cert_file_path, '\n')
                     public_key = self._public_key_from_certificate(cert_file_path)
                     self.public_keys[cert_file_path] = public_key
+                if (public_key):
                     public_keys.append(public_key)
             else:
                 private_key_path = self._find_file(['private_key', 'backup_key', 'previous_key'],
                                                    cert_file_name, key_type=key_type, username=username)
                 if (private_key_path):
                     if (private_key_path in self.public_keys):
-                        public_keys.append(self.public_keys[private_key_path])
+                        public_key = self.public_keys[private_key_path]
                     else:
                         self._debug('Loading public key from private key ', private_key_path, '\n')
                         public_key = self._public_key_from_private_key(private_key_path, passphrase)
-                        self.public_keys[cert_file_path] = public_key
+                        self.public_keys[private_key_path] = public_key
+                    if (public_key):
                         public_keys.append(public_key)
         if (not public_keys):
             self._warn('Certificate or private key file not found for ', cert_file_name, '\n')
         return public_keys
 
-    def _alternative_names_from_certificate(self, cert_file_name, type):
+    def _alternative_names_from_certificate(self, cert_file_name: str, type: str) -> Collection[str]:
         alternative_names = set()
         key_types = [type] if (type) else ['rsa', 'ecdsa']
-        regex = re.compile('.*X509v3 Subject Alternative Name:\\s*([^\\n]*)\\n.*', re.DOTALL)
+        regex = re.compile(r'.*X509v3 Subject Alternative Name:\s*([^\n]*)\n.*', re.DOTALL)
 
         for key_type in key_types:
             cert_file_path = self._find_file('certificate', cert_file_name, key_type=key_type, username='')
@@ -549,29 +535,30 @@ class BindTool:
                 self._debug('Loading alternative names from certificate ', cert_file_path, '\n')
                 match = regex.match(subprocess.check_output(['openssl', 'x509', '-in', cert_file_path, '-noout', '-text']).decode('ascii'))
                 if (match):
-                    alternative_names |= set([name[4:] for name in match.group(1).split(', ') if name.startswith('DNS:')])
+                    alternative_names |= {name[4:] for name in match.group(1).split(', ') if name.startswith('DNS:')}
         return alternative_names
 
-    def _load_dkim_public_key(self, selector, domain):
+    def _load_dkim_public_key(self, selector: str, domain: str) -> (bytes | None):
         key_file_path = self._find_file('dkim', domain, selector=selector, domain=domain)
         if (key_file_path):
             return subprocess.check_output(['openssl', 'rsa', '-in', key_file_path, '-outform', 'DER', '-pubout'], stderr=subprocess.DEVNULL)
         self._warn('DKIM key ', selector, ' for ', domain, ' not found\n')
+        return None
 
-    def _validate(self, params, command, param, values, convert=None):
+    def _validate(self, params: dict[str, str], command: str, param: str, values: Sequence[str], convert: (Sequence[str] | None) = None) -> None:
         if (params[param] not in values):
             self._error('Unknown value "', params[param], '" for ', param, ' in {{', command, '}}\n',
                         'Must be one of: "', '", "'.join(values), '"\n')
         if (convert):
             params[param] = convert[values.index(params[param])]
 
-    def _validate_numeric(self, params, command, param):
+    def _validate_numeric(self, params: Mapping[str, str], command: str, param: str) -> None:
         if (not params[param].isdigit()):
             self._error(param.title(), ' must be numeric for {{', command, '}}\n')
 
-    def soa_record(self, params, command, zone_name):
-        params = self._parse_params('soa', params, ['primary_server', 'admin', 'refresh', 'retry', 'expire', 'minimum', 'master_server', 'ttl'],
-                                    {}, {'ttl': '\t'}, command)
+    def soa_record(self, args: list[tuple[str, str]], command: str, zone_name: str) -> str:
+        params = self._parse_args('soa', args, ['primary_server', 'admin', 'refresh', 'retry', 'expire', 'minimum', 'master_server', 'ttl'],
+                                  {}, {'ttl': '\t'}, command)
         if ('primary_server' not in params):
             self._error('soa record must specify primary server {{', command, '}}\n')
         if ('admin' not in params):
@@ -590,13 +577,13 @@ class BindTool:
             self._debug('Found serial number ', existing_serial, '\n')
         except Exception as error:
             self._error('Unable to perform DNS SOA query\n', error, '\n')
-        serial = max(int(datetime.datetime.now().strftime('%Y%m%d00')), existing_serial + 1)
+        serial = max(int(datetime.now(tz=timezone.utc).strftime('%Y%m%d00')), existing_serial + 1)
         self._debug('Using serial number ', serial, '\n')
 
-        return '@{ttl}\tSOA\t{primary_server} {admin} {serial} {refresh} {retry} {expire} {minimum}\n'.format(serial=serial, **params)
+        return '@{ttl}\tSOA\t{primary_server} {admin} {serial} {refresh} {retry} {expire} {minimum}\n'.format(serial=serial, **params)  # noqa: FS002
 
-    def sshfp_record(self, params, command, zone_name):
-        params = self._parse_params('sshfp', params, ['host', 'key_file', 'ttl', 'type'], {}, {'ttl': '\t'}, command)
+    def sshfp_record(self, args: list[tuple[str, str]], command: str, zone_name: str) -> str:
+        params = self._parse_args('sshfp', args, ['host', 'key_file', 'ttl', 'type'], {}, {'ttl': '\t'}, command)
         self._validate(params, command, 'type', ('', 'rsa', 'dsa', 'ecdsa', 'ed25519'))
 
         key_type_value = {'rsa': 1, 'dsa': 2, 'ecdsa': 3, 'ed25519': 4}
@@ -609,21 +596,22 @@ class BindTool:
             if (key_file_path):
                 found = True
                 try:
-                    with open(key_file_path) as keyFile:
-                        key_text = keyFile.read().split(' ')
+                    with open(key_file_path) as key_file:
+                        key_text = key_file.read().split(' ')
                         key = base64.b64decode(key_text[1])
 
-                        output += '{host}{ttl}\tSSHFP\t{key_type} 1 {digest}\n'.format(key_type=key_type_value[key_type], digest=self._sha1(key), **params)
-                        output += '{host}{ttl}\tSSHFP\t{key_type} 2 {digest}\n'.format(key_type=key_type_value[key_type], digest=self._sha256(key), **params)
+                        record = '{host}{ttl}\tSSHFP\t{key_type}'.format(key_type=key_type_value[key_type], **params)  # noqa: FS002
+                        output += f'{record} 1 {self._sha1(key)}\n'
+                        output += f'{record} 2 {self._sha256(key)}\n'
                 except Exception as error:
                     self._error('Unable to read key from ', key_file_path, '\n', error, '\n')
         if (not found):
             self._warn('No SSH keys found for: ', params['host'], ' matching: ', params['key_file'], '\n')
         return output
 
-    def tlsa_record(self, params, command, zone_name):
-        params = self._parse_params('tlsa', params, ['port', 'host', 'cert_file', 'usage', 'selector', 'proto', 'ttl', 'type', 'pass'],
-                                    {'cert_file': zone_name}, {'host': '.', 'ttl': '\t'}, command)
+    def tlsa_record(self, args: list[tuple[str, str]], command: str, zone_name: str) -> str:
+        params = self._parse_args('tlsa', args, ['port', 'host', 'cert_file', 'usage', 'selector', 'proto', 'ttl', 'type', 'pass'],
+                                  {'cert_file': zone_name}, {'host': '.', 'ttl': '\t'}, command)
         self._validate_numeric(params, command, 'port')
         self._validate(params, command, 'usage', ('pkix-ta', 'pkix-ee', 'dane-ta', 'dane-ee'), ('0', '1', '2', '3'))
         self._validate(params, command, 'selector', ('cert', 'spki'), ('0', '1'))
@@ -637,16 +625,16 @@ class BindTool:
         if (not payloads):
             return ''
 
-        record = '_{port}._{proto}{host}{ttl}\tTLSA\t{usage} {selector} '.format(**params)
+        record = '_{port}._{proto}{host}{ttl}\tTLSA\t{usage} {selector}'.format(**params)  # noqa: FS002
         output = ''
         for payload in payloads:
-            output += record + '1 {digest}\n'.format(digest=self._sha256(payload))
-            output += record + '2 {digest}\n'.format(digest=self._sha512(payload))
+            output += f'{record} 1 {self._sha256(payload)}\n'
+            output += f'{record} 2 {self._sha512(payload)}\n'
         return output
 
-    def tlsa_cert_record(self, params, command, zone_name):
-        params = self._parse_params('tlsa_cert', params, ['port', 'cert_file', 'usage', 'selector', 'proto', 'ttl', 'type'],
-                                    {'cert_file': zone_name}, {'ttl': '\t'}, command)
+    def tlsa_cert_record(self, args: list[tuple[str, str]], command: str, zone_name: str) -> str:
+        params = self._parse_args('tlsa_cert', args, ['port', 'cert_file', 'usage', 'selector', 'proto', 'ttl', 'type'],
+                                  {'cert_file': zone_name}, {'ttl': '\t'}, command)
         self._validate_numeric(params, command, 'port')
         self._validate(params, command, 'usage', ('pkix-ta', 'pkix-ee', 'dane-ta', 'dane-ee'), ('0', '1', '2', '3'))
         self._validate(params, command, 'selector', ('cert', 'spki'), ('0', '1'))
@@ -665,24 +653,24 @@ class BindTool:
             return ''
 
         output = ''
-        for host in alternative_names:
+        for host in sorted(alternative_names):
             if ('*' in host):
                 self._error('tlsa_cert record certificate ', params['cert_file'], ' must not include wildcard hosts\n')
-            record = '_{port}._{proto}.{host}{ttl}\tTLSA\t{usage} {selector} '.format(host=host, **params)
+            record = '_{port}._{proto}.{host}{ttl}\tTLSA\t{usage} {selector}'.format(host=host, **params)  # noqa: FS002
             for payload in payloads:
-                output += record + '1 {digest}\n'.format(digest=self._sha256(payload))
-                output += record + '2 {digest}\n'.format(digest=self._sha512(payload))
+                output += f'{record} 1 {self._sha256(payload)}\n'
+                output += f'{record} 2 {self._sha512(payload)}\n'
         return output
 
-    def _email_hash(self, localpart):
+    def _email_hash(self, localpart: str) -> str:
         if ('*' != localpart):
             localpart = unicodedata.normalize('NFC', localpart)
             return self._sha256(localpart.encode('utf-8'))[:56]
         return localpart
 
-    def smimea_record(self, params, command, zone_name):
-        params = self._parse_params('smimea', params, ['user', 'host', 'cert_file', 'usage', 'selector', 'ttl', 'type', 'pass'],
-                                    {'cert_file': zone_name}, {'host': '.', 'ttl': '\t'}, command)
+    def smimea_record(self, args: list[tuple[str, str]], command: str, zone_name: str) -> str:
+        params = self._parse_args('smimea', args, ['user', 'host', 'cert_file', 'usage', 'selector', 'ttl', 'type', 'pass'],
+                                  {'cert_file': zone_name}, {'host': '.', 'ttl': '\t'}, command)
         if ('user' not in params):
             self._error('smimea record must specify user {{', command, '}}\n')
         self._validate(params, command, 'usage', ('pkix-ta', 'pkix-ee', 'dane-ta', 'dane-ee'), ('0', '1', '2', '3'))
@@ -698,16 +686,17 @@ class BindTool:
         if (not payloads):
             return ''
 
-        record = '{userhash}._smimecert{host}{ttl}\tSMIMEA\t{usage} {selector} '.format(userhash=userhash, **params)
+        record = '{userhash}._smimecert{host}{ttl}\tSMIMEA\t{usage} {selector}'.format(userhash=userhash, **params)  # noqa: FS002
         output = ''
         for payload in payloads:
-            output += record + '0 {cert}\n'.format(cert=self._wrap(self._hex(payload), 120, 125)) if ('cert' == params['selector']) else ''
-            output += record + '1 {digest}\n'.format(digest=self._sha256(payload))
-            output += record + '2 {digest}\n'.format(digest=self._sha512(payload))
+            if ('cert' == params['selector']):
+                output += f'{record} 0 {self._wrap(self._hex(payload), 120, 125)}\n'
+            output += f'{record} 1 {self._sha256(payload)}\n'
+            output += f'{record} 2 {self._sha512(payload)}\n'
         return output
 
-    def acme_record(self, params, command, zone_name):
-        params = self._parse_params('acme', params, ['challenge_file', 'ttl'], {'challenge_file': zone_name}, {'ttl': '\t'}, command)
+    def acme_record(self, args: list[tuple[str, str]], command: str, zone_name: str) -> str:
+        params = self._parse_args('acme', args, ['challenge_file', 'ttl'], {'challenge_file': zone_name}, {'ttl': '\t'}, command)
 
         output = ''
         challenge_path = self._find_file('acme', params['challenge_file'])
@@ -720,14 +709,13 @@ class BindTool:
             self._debug('ACME challenge file ', params['challenge_file'], ' not found\n')
         return output
 
-    def _caa_rr(self, params, flag, tag, caname):
+    def _caa_rr(self, params: Mapping[str, str], flag: str, tag: str, caname: str) -> str:
         return self._generic_rr(params, 257,
                                 int(flag).to_bytes(1, byteorder='big') + len(tag).to_bytes(1, byteorder='big')
                                 + tag.encode('ascii') + caname.encode('ascii'))
 
-    def caa_record(self, params, command, zone_name):
-        params = self._parse_params('caa', params, ['tag', 'caname', 'host', 'flag', 'ttl'],
-                                    {}, {'ttl': '\t'}, command)
+    def caa_record(self, args: list[tuple[str, str]], command: str, zone_name: str) -> str:
+        params = self._parse_args('caa', args, ['tag', 'caname', 'host', 'flag', 'ttl'], {}, {'ttl': '\t'}, command)
         if ('tag' not in params):
             self._error('caa record must specify tag {{', command, '}}\n')
         if ('caname' not in params):
@@ -736,20 +724,19 @@ class BindTool:
 
         return self._caa_rr(params, params['flag'], params['tag'], params['caname'])
 
-    def dkim_record(self, params, command, zone_name):
-        params = self._parse_params('dkim', params, ['selector', 'domain', 'host', 'ttl'],
-                                    {'domain': zone_name}, {'host': '.', 'ttl': '\t'}, command)
+    def dkim_record(self, args: list[tuple[str, str]], command: str, zone_name: str) -> str:
+        params = self._parse_args('dkim', args, ['selector', 'domain', 'host', 'ttl'], {'domain': zone_name}, {'host': '.', 'ttl': '\t'}, command)
 
         dkim_public_key = self._load_dkim_public_key(params['selector'], params['domain'])
         if (dkim_public_key):
-            return self._txt_rr(params, '{selector}._domainkey{host}'.format(**params),
-                                'v=DKIM1; k=rsa; p={key}'.format(key=base64.b64encode(dkim_public_key).decode('ascii')))
+            return self._txt_rr(params, '{selector}._domainkey{host}'.format(**params),  # noqa: FS002
+                                f"v=DKIM1; k=rsa; p={base64.b64encode(dkim_public_key).decode('ascii')}")
         return ''
 
-    def dmarc_record(self, params, command, zone_name):
-        params = self._parse_params('dmarc', params, ['policy', 'rua', 'ruf', 'subdomain_policy', 'options', 'dkim_alignment', 'spf_alignment',
-                                                      'report_format', 'interval', 'percent', 'ttl'],
-                                    {}, {'ttl': '\t'}, command)
+    def dmarc_record(self, args: list[tuple[str, str]], command: str, zone_name: str) -> str:
+        params = self._parse_args('dmarc', args, ['policy', 'rua', 'ruf', 'subdomain_policy', 'options', 'dkim_alignment', 'spf_alignment',
+                                                  'report_format', 'interval', 'percent', 'ttl'],
+                                  {}, {'ttl': '\t'}, command)
 
         if (params['rua']):
             params['rua'] = 'rua=' + ','.join([('mailto:' + addr.strip()) for addr in params['rua'].split(',')]) + '; '
@@ -767,16 +754,16 @@ class BindTool:
 
         return self._txt_rr(params, '_dmarc',
                             'v=DMARC1; p={policy}; {rua}{ruf}sp={subdomain_policy}; fo={options}; adkim={dkim_alignment}; aspf={spf_alignment}; '
-                            'rf={report_format}; ri={interval}; pct={percent};'.format(**params))
+                            'rf={report_format}; ri={interval}; pct={percent};'.format(**params))  # noqa: FS002
 
-    def pgp_record(self, params, command, zone_name):
+    def pgp_record(self, args: list[tuple[str, str]], command: str, zone_name: str) -> str:
         self._error('pgp records not yet supported\n')
 
-    def _decode_zone(self, zone):
+    def _decode_ldap_entry(self, zone: tuple[str, Mapping[str, Sequence[bytes]]]) -> Mapping[str, Sequence[str]]:
         return {key: [value.decode('ascii') for value in values] for key, values in zone[1].items()}
 
-    def _load_ldap_zones(self, zone_name):
-        zones = {}
+    def _load_ldap_zones(self, zone_name: str) -> Sequence[Mapping[str, Sequence[str]]]:
+        zones: list[Mapping[str, Sequence[str]]] = []
         cache_file_path = self._file_path('cache', zone_name)
         if (os.path.isfile(cache_file_path)):
             try:
@@ -796,20 +783,19 @@ class BindTool:
             return zones
 
         try:
-            zones = ldap_server.search_s('zoneName={zone_name}.,{base}'.format(zone_name=zone_name, base=self._ldap('search_base')),
-                                         ldap.SCOPE_SUBTREE, filterstr=self._ldap('filter'))
-            zones = [self._decode_zone(zone) for zone in zones]
+            ldap_entries = ldap_server.search_s(f"zoneName={zone_name}.,{self._ldap('search_base')}", ldap.SCOPE_SUBTREE, filterstr=self._ldap('filter'))
+            zones = [self._decode_ldap_entry(zone) for zone in ldap_entries]
             try:
                 with self._open_file(cache_file_path, mode='w', chmod=0o600) as cache_file:
                     json.dump(zones, cache_file)
             except Exception as error:
                 self._error('Unable to save ldap cache: ', error, '\n')
 
-        except:
+        except Exception:
             pass
         return zones
 
-    def ldap_record(self, params, command, zone_name):
+    def ldap_record(self, args: list[tuple[str, str]], command: str, zone_name: str) -> str:
         zones = self._load_ldap_zones(zone_name)
         output = ''
         record_type_map = {
@@ -828,11 +814,12 @@ class BindTool:
             'dSRecord': 'DS',
             'aFSDBRecord': 'AFSDB',
         }
-        def _record(record_type, host, data):
+
+        def _record(record_type: str, host: str, data: str) -> str:
             if ('TXT' == record_type):
                 return self._txt_rr({'ttl': ''}, host, data)
             data = data.replace(';', r'\;')
-            return f"{host}\t{record_type}\t{data}\n"
+            return f'{host}\t{record_type}\t{data}\n'
 
         for zone in zones:
             if (zone['zoneName'][0] == (zone_name + '.')):
@@ -842,8 +829,8 @@ class BindTool:
                             output += _record(record_type_map[record_type], zone['relativeDomainName'][0], record)
         return output
 
-    def include(self, params, command, zone_name, zone_file_path, param_vars):
-        params = self._parse_params('include', params, ['file'], {}, {}, command)
+    def include(self, args: list[tuple[str, str]], command: str, zone_name: str, zone_file_path: str, param_vars: Mapping[str, str]) -> tuple[str, bool]:
+        params = self._parse_args('include', args, ['file'], {}, {}, command)
         if (not params['file']):
             self._error('Include file path not specified\n')
         hold_include_parent = self.config['directories'].get('include_parent')
@@ -853,7 +840,7 @@ class BindTool:
         if ((not include_file_paths) and ('*' not in params['file']) and ('?' not in params['file'])):
             self._error('Include file "', params['file'], '" not found\n')
         del params['file']
-        local_vars = {}
+        local_vars: dict[str, str] = {}
         for key, value in param_vars.items():
             local_vars[key] = value
         for key, value in params.items():
@@ -867,15 +854,15 @@ class BindTool:
             has_soa = has_soa or file_has_soa
         return output, has_soa
 
-    def _append(self, output, records):
+    def _append(self, output: str, records: str) -> str:
         last_line_index = output.rfind('\n')
         if (-1 < last_line_index):
             last_line = output[last_line_index + 1:]
             if (';' in last_line):
-                return output + '\n;'.join([record for record in records.split('\n')])
+                return output + '\n;'.join(records.split('\n'))
         return output + records
 
-    def _process_zone_file(self, zone_file_path, zone_name, param_vars):
+    def _process_zone_file(self, zone_file_path: str, zone_name: str, param_vars: Mapping[str, str]) -> tuple[str, bool]:
         if (not os.path.isfile(zone_file_path)):
             self._error('Zone file ', zone_file_path, ' not found\n')
 
@@ -896,32 +883,32 @@ class BindTool:
                     elif (re.match(r'^[a-z_]+:', command)):
                         if (((0 == len(output)) or ('\n' == output[-1])) and ('\n' == input[0:1])):
                             input = input[1:]
-                        record, params = self._split_command(command)
+                        record, args = self._split_command(command)
                         if ('soa' == record):
-                            output = self._append(output, self.soa_record(params, command, zone_name))
+                            output = self._append(output, self.soa_record(args, command, zone_name))
                             has_soa = True
                         elif ('sshfp' == record):
-                            output = self._append(output, self.sshfp_record(params, command, zone_name))
+                            output = self._append(output, self.sshfp_record(args, command, zone_name))
                         elif ('tlsa' == record):
-                            output = self._append(output, self.tlsa_record(params, command, zone_name))
+                            output = self._append(output, self.tlsa_record(args, command, zone_name))
                         elif ('tlsa_cert' == record):
-                            output = self._append(output, self.tlsa_cert_record(params, command, zone_name))
+                            output = self._append(output, self.tlsa_cert_record(args, command, zone_name))
                         elif ('smimea' == record):
-                            output = self._append(output, self.smimea_record(params, command, zone_name))
+                            output = self._append(output, self.smimea_record(args, command, zone_name))
                         elif ('acme' == record):
-                            output = self._append(output, self.acme_record(params, command, zone_name))
+                            output = self._append(output, self.acme_record(args, command, zone_name))
                         elif ('caa' == record):
-                            output = self._append(output, self.caa_record(params, command, zone_name))
+                            output = self._append(output, self.caa_record(args, command, zone_name))
                         elif ('dkim' == record):
-                            output = self._append(output, self.dkim_record(params, command, zone_name))
+                            output = self._append(output, self.dkim_record(args, command, zone_name))
                         elif ('dmarc' == record):
-                            output = self._append(output, self.dmarc_record(params, command, zone_name))
+                            output = self._append(output, self.dmarc_record(args, command, zone_name))
                         elif ('pgp' == record):
-                            output = self._append(output, self.pgp_record(params, command, zone_name))
+                            output = self._append(output, self.pgp_record(args, command, zone_name))
                         elif ('ldap' == record):
-                            output = self._append(output, self.ldap_record(params, command, zone_name))
+                            output = self._append(output, self.ldap_record(args, command, zone_name))
                         elif ('include' == record):
-                            include, included_soa = self.include(params, command, zone_name, zone_file_path, param_vars)
+                            include, included_soa = self.include(args, command, zone_name, zone_file_path, param_vars)
                             output = self._append(output, include)
                             has_soa = (has_soa or included_soa)
                         else:
@@ -945,9 +932,9 @@ class BindTool:
                     break
         return output, has_soa
 
-    def process_zone_file(self, zone_file_path, out_file_path):
+    def process_zone_file(self, zone_file_path: str, out_file_path: str) -> None:
         self.vars = {}
-        param_vars = {}
+        param_vars: dict[str, str] = {}
 
         zone_name = os.path.basename(zone_file_path)
         output, has_soa = self._process_zone_file(zone_file_path, zone_name, param_vars)
@@ -962,21 +949,22 @@ class BindTool:
         else:
             print(output)
 
-    def run(self):
+    def run(self) -> None:
         self._validate_config(self.args.zone_file_path)
         self.process_zone_file(self.args.zone_file_path, self.args.out_file_path)
 
 
-def debug_hook(type, value, tb):
+def debug_hook(type: type[BaseException], value: BaseException, traceback: (TracebackType | None) = None) -> None:
+    """Hook for starting the debugger in debug mode."""
     if hasattr(sys, 'ps1') or not sys.stderr.isatty():
         # we are in interactive mode or we don't have a tty-like
         # device, so we call the default hook
-        sys.__excepthook__(type, value, tb)
+        sys.__excepthook__(type, value, traceback)
     else:
         import pdb
-        import traceback
+        import traceback as tb
         # we are NOT in interactive mode, print the exception...
-        traceback.print_exception(type, value, tb)
+        tb.print_exception(type, value, traceback)
         print()
         # ...then start the debugger in post-mortem mode.
         pdb.pm()
