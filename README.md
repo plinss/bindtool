@@ -434,7 +434,7 @@ Becomes:
 
 DMARC (TXT) records are specified as follows:
 
-    {{dmarc:policy:rua:ruf:subdomain_policy:options:dkim_alignment:spf_alignment:report_format:interval:percent:ttl}}
+    {{dmarc:policy:rua:ruf:subdomain_policy:options:dkim_alignment:spf_alignment:report_format:interval:percent:host:ttl}}
 
 All arguments are optional.
 
@@ -456,6 +456,10 @@ The default value is `afrf`.
 The default values is `86400` (1 day).
 * `percent` is a numeric value from 0 to 100.
 The default value is `100`.
+* `host` is the host name for the DKIM key.
+The default value is `@`
+* `ttl` is the TTL value for the TXT record.
+The default value is empty.
 
 Example:
 
@@ -574,8 +578,4 @@ Will result in the output of:
     @   TYPE257 \# 22 010569737375656c657473656e63727970742e6f7267
 
     ; ACME
-
-
-
-
 

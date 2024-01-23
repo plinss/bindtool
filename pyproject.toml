@@ -7,12 +7,12 @@ build-backend = 'setuptools.build_meta'
 name = 'bindtool'
 description = 'Preprocessor for Bind9 zone files'
 readme = 'README.md'
-requires-python = '>=3.7'
+requires-python = '>= 3.7'
 dependencies = [
-	'py3dns>=3.1.0',
-	'python-ldap>=3.2.0',
-	'pyasn1>=0.4.5',
-	'setuptools; python_version<"3.9"',
+	'py3dns >= 3.1.0, < 4.0.0',
+	'python-ldap >= 3.2.0, < 4.0.0',
+	'pyasn1 >= 0.4.5, < 1.0.0',
+	'setuptools; python_version < "3.9"',
 ]
 dynamic = ['version']
 
@@ -45,6 +45,7 @@ dev = [
 	'flake8-datetimez',
 	'flake8-docstrings',
 	'flake8-import-order',
+	'flake8-keyword-params',
 	'flake8-literal',
 	'flake8-modern-annotations',
 	'flake8-noqa',
@@ -60,7 +61,7 @@ dev = [
 
 
 [tool.flake8]
-ignore = ['D102', 'D105', 'D107', 'D401', 'W503', 'ANN002', 'ANN003', 'ANN101', 'ANN102', 'ANN401', 'FS003', 'S110', 'S303', 'S324', 'S404', 'S603', 'S607']
+ignore = ['D102', 'D105', 'D107', 'D401', 'W503', 'ANN002', 'ANN003', 'ANN101', 'ANN102', 'ANN401', 'FS003', 'S110', 'S303', 'S324']
 max-line-length = 160
 
 

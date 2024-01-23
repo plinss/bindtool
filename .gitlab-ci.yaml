@@ -1,5 +1,5 @@
 ---
-image: python:3.7-bullseye
+image: python:3.7-bookworm
 
 
 .setup:
@@ -42,69 +42,18 @@ mypy:
     - mypy src
 
 
-test_3.7:
+test:
   stage: test
-  image: python:3.7-bullseye
-  before_script:
-    - !reference [.setup, before_script]
-    - !reference [.depends, before_script]
-    - pip install -e ".[test]"
-    - chmod a+x test.py
-  script:
-    - ./test.py
-  rules:
-    - exists:
-        - test.py
-
-
-test_3.8:
-  stage: test
-  image: python:3.8-bullseye
-  before_script:
-    - !reference [.setup, before_script]
-    - !reference [.depends, before_script]
-    - pip install -e ".[test]"
-    - chmod a+x test.py
-  script:
-    - ./test.py
-  rules:
-    - exists:
-        - test.py
-
-
-test_3.9:
-  stage: test
-  image: python:3.9-bullseye
-  before_script:
-    - !reference [.setup, before_script]
-    - !reference [.depends, before_script]
-    - pip install -e ".[test]"
-    - chmod a+x test.py
-  script:
-    - ./test.py
-  rules:
-    - exists:
-        - test.py
-
-
-test_3.10:
-  stage: test
-  image: python:3.10-bullseye
-  before_script:
-    - !reference [.setup, before_script]
-    - !reference [.depends, before_script]
-    - pip install -e ".[test]"
-    - chmod a+x test.py
-  script:
-    - ./test.py
-  rules:
-    - exists:
-        - test.py
-
-
-test_3.11:
-  stage: test
-  image: python:3.11-bullseye
+  image: python:${TEST_PYTHON_VERSION}-bookworm
+  parallel:
+    matrix:
+      - TEST_PYTHON_VERSION:
+        - '3.7'
+        - '3.8'
+        - '3.9'
+        - '3.10'
+        - '3.11'
+        - '3.12'
   before_script:
     - !reference [.setup, before_script]
     - !reference [.depends, before_script]
