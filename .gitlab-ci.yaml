@@ -1,5 +1,5 @@
 ---
-image: python:3.7-bookworm
+image: python:3.9-bookworm
 
 
 .setup:
@@ -48,12 +48,11 @@ test:
   parallel:
     matrix:
       - TEST_PYTHON_VERSION:
-        - '3.7'
-        - '3.8'
         - '3.9'
         - '3.10'
         - '3.11'
         - '3.12'
+        - '3.13'
   before_script:
     - !reference [.setup, before_script]
     - !reference [.depends, before_script]

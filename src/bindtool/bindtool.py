@@ -15,25 +15,22 @@ import sys
 import unicodedata
 from collections.abc import Mapping
 from datetime import datetime, timezone
+from importlib.metadata import version as module_version
 from typing import Any, IO, NoReturn, TYPE_CHECKING, cast
 
 import DNS
 
-import ldap
+
+try:
+    import ldap
+    LDAP_AVAILABLE = True
+except ModuleNotFoundError:
+    LDAP_AVAILABLE = False
+
 
 if (TYPE_CHECKING):
     from collections.abc import Collection, Sequence
     from types import TracebackType
-
-
-def module_version(module: str) -> str:
-    """Get version of installed module."""
-    try:
-        from importlib.metadata import version
-        return version(module)
-    except ModuleNotFoundError:
-        from pkg_resources import get_distribution
-        return get_distribution(module).version
 
 
 class Args:
@@ -798,7 +795,7 @@ class BindTool:
             return zones
 
         try:
-            ldap_entries = ldap_server.search_s(f'zoneName={zone_name}.,{self._ldap("search_base")}',
+            ldap_entries = ldap_server.search_s(f"zoneName={zone_name}.,{self._ldap('search_base')}",
                                                 ldap.SCOPE_SUBTREE, filterstr=self._ldap('filter'))  # type: ignore
             zones = [self._decode_ldap_entry(zone) for zone in ldap_entries]
             try:
@@ -812,6 +809,9 @@ class BindTool:
         return zones
 
     def ldap_record(self, args: Sequence[tuple[str, str]], command: str, zone_name: str) -> str:
+        if (not LDAP_AVAILABLE):
+            self._error('LDAP module not installed. Run `pip install python-ldap`.')
+
         zones = self._load_ldap_zones(zone_name)
         output = ''
         record_type_map = {

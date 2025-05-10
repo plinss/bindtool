@@ -9,11 +9,19 @@ This greatly simplifies keeping DNS zones current when keys change as no zone fi
 
 ## Installation
 
-Requires Python3.7+.
+Requires Python 3.9+.
 
     sudo pip3 install bindtool
 
 Optionally create a virtual environment and install there.
+
+For support reading DNS records from LDAP, you'll need to install the ldap module as well, either:
+
+    sudo pip3 install 'bindtool[ldap]'
+
+or:
+
+    sudo pip3 install python-ldap
 
 
 ### Configuration
