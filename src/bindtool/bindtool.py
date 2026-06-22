@@ -13,6 +13,7 @@ import re
 import subprocess  # noqa: S404
 import sys
 import unicodedata
+from collections import deque
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from importlib.metadata import version as module_version
@@ -246,8 +247,13 @@ class BindTool:
     def _message(self, *args, sep: str = ' ', end: str = '\n') -> str:
         return (sep.join((str(arg, 'utf-8', 'replace') if isinstance(arg, bytes) else str(arg)) for arg in args) + end)
 
+    def _escape(self, value: str) -> str:
+        output = value.replace('\\', '\\\\')
+        output = output.replace('"', '\\"')
+        return output
+
     def _quoted(self, *args) -> str:
-        return ('"' + '", "'.join(args) + '"')
+        return ('"' + '", "'.join(self._escape(arg) for arg in args) + '"')
 
     def _command(self, command: str) -> str:
         return f'{{{command}}}'
@@ -419,13 +425,65 @@ class BindTool:
                 params[name] = prefix + params[name]
         return params
 
-    def _wrap(self, value: str, *, length: int = 80, threshold: int = 100) -> str:
-        if (len(value) <= threshold):
-            return value
+    def _break(self, value: str) -> deque[str]:
+        words = deque()
+        word = ''
+        index = 0
+        while (index < len(value)):
+            char = value[index]
+            if (' ' == char):
+                if (word):
+                    words.append(word)
+                    word = ''
+                while ((index < len(value)) and (' ' == value[index])):
+                    word += ' '
+                    index += 1
+                words.append(word)
+                word = ''
+            elif ('"' == char):
+                word += char
+                index += 1
+                while ((index < len(value)) and (char != value[index])):
+                    word += value[index]
+                    index += 1
+                word += char
+                index += 1
+            else:
+                word += char
+                index += 1
+        if (word):
+            words.append(word)
+        assert(''.join(words) == value)
+        return words
+
+    def _wrap(self, value: str, *, length: int = 80, threshold: int = 100, quoted: bool = False) -> str:
+        if (quoted):
+            threshold -= 2
+            length -= 2
+        if (len(value) <= min(255, threshold)):
+            return (self._quoted(value) if (quoted) else value)
+        length = min(255, length)
         output = '(\n'
-        while (0 < len(value)):
-            output += f'\t\t{value[:length]}\n'
-            value = value[length:]
+        line = ''
+        words = self._break(value)
+        while (words):
+            word = words.popleft()
+            if ((not quoted) and word.isspace()):
+                word = ' '
+            if ((len(line) + len(word)) < length):  # word fits on current line
+                line += word
+                continue
+            if ((length < len(word)) or word.isspace()):  # word does not fit on a line by itself or is all space, split it
+                available = (length - len(line))
+                line += word[:available]
+                words.appendleft(word[available:])
+                word = ''
+            if (line):
+                output += f'\t\t{self._quoted(line) if (quoted) else line.rstrip()}\n'
+            line = (word if (quoted) else word.strip())  # start new line
+
+        if (line):
+            output += f'\t\t{self._quoted(line) if (quoted) else line.rstrip()}\n'
         output += '\t)'
         return output
 
@@ -440,15 +498,7 @@ class BindTool:
 
     def _txt_rr(self, params: Mapping[str, str], host: str, data: str, *, length: int = 80, threshold: int = 100) -> str:
         output = self._record('{host}{ttl}\tTXT\t', params, host=host, end='')
-        if (len(data) <= min(255, threshold)):
-            return f'{output}{self._quoted(data)}\n'
-        length = min(255, length)
-        output += '(\n'
-        while (0 < len(data)):
-            output += f'\t\t"{data[:length]}"\n'
-            data = data[length:]
-        output += '\t)\n'
-        return output
+        return f'{output}{self._wrap(data, length=length, threshold=threshold, quoted=True)}\n'
 
     def _hex(self, value: bytes) -> str:
         return binascii.hexlify(value).decode('ascii')
@@ -819,6 +869,8 @@ class BindTool:
             'aAAARecord': 'AAAA',
             'tXTRecord': 'TXT',
             'sRVRecord': 'SRV',
+            'sVCBRecord': 'SVCB',
+            'hTTPSRecord': 'HTTPS',
             'sSHFPRecord': 'SSHFP',
             'mXRecord': 'MX',
             'cNAMERecord': 'CNAME',
@@ -835,7 +887,7 @@ class BindTool:
             if ('TXT' == record_type):
                 return self._txt_rr({'ttl': ''}, host, data)
             data = data.replace(';', r'\;')
-            return f'{host}\t{record_type}\t{data}\n'
+            return f'{host}\t{record_type}\t{self._wrap(data)}\n'
 
         for zone in zones:
             if (zone['zoneName'][0] == (zone_name + '.')):
