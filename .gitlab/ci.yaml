@@ -1,10 +1,10 @@
 ---
-image: python:3.9-bookworm
+image: python:3.13-trixie
 
 
 .setup:
   before_script:
-    - source .gitlab-ci.env
+    - source .gitlab/ci.env
 
 
 .depends:
@@ -32,14 +32,14 @@ flake8:
     - flake8 src
 
 
-mypy:
+pyright:
   stage: lint
   before_script:
     - !reference [.setup, before_script]
     - !reference [.depends, before_script]
-    - pip install -e ".[dev]"
+    - pip install -e ".[dev,ldap]"
   script:
-    - mypy src
+    - pyright src
 
 
 test:
@@ -53,6 +53,7 @@ test:
         - '3.11'
         - '3.12'
         - '3.13'
+        - '3.14'
   before_script:
     - !reference [.setup, before_script]
     - !reference [.depends, before_script]

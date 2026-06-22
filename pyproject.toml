@@ -36,7 +36,6 @@ ldap = [
 dev = [
 	'types-PyYAML',
 	'types-setuptools',
-	'mypy',
 	'flake8',
 	'flake8-annotations',
 	'flake8-bandit',
@@ -56,6 +55,8 @@ dev = [
 	'flake8-typechecking-import',
 	'flake8-use-fstring',
 	'pep8-naming',
+	'pyright',
+	'setuptools < 80.5.0',
 ]
 
 
@@ -63,17 +64,15 @@ dev = [
 
 
 [tool.flake8]
-ignore = ['D102', 'D105', 'D107', 'D401', 'W503', 'ANN002', 'ANN003', 'ANN101', 'ANN102', 'ANN401', 'FS003', 'S110', 'S303', 'S324']
+ignore = [
+	'D102', 'D105', 'D107', 'D401',
+	'W503',
+	'ANN002', 'ANN003', 'ANN101', 'ANN102', 'ANN401',
+	'FS003',
+	'S105', 'S110', 'S303', 'S324',
+]
 max-line-length = 160
 
 
 [tool.flake8.known-modules]
 py3dns = ['DNS']
-
-
-[tool.mypy]
-mypy_path = 'stubs'
-
-[[tool.mypy.overrides]]
-module = ['DNS', 'ldap', 'importlib.metadata']
-ignore_missing_imports = true

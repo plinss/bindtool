@@ -21,17 +21,16 @@ from typing import Any, IO, NoReturn, TYPE_CHECKING, cast
 
 import DNS
 
+if (TYPE_CHECKING):
+    from collections.abc import Collection, Sequence
+    from types import TracebackType
+
 
 try:
     import ldap
     LDAP_AVAILABLE = True
 except ModuleNotFoundError:
     LDAP_AVAILABLE = False
-
-
-if (TYPE_CHECKING):
-    from collections.abc import Collection, Sequence
-    from types import TracebackType
 
 
 class Args:
@@ -206,7 +205,7 @@ class BindTool:
         if ('.' in config_filename):
             name, extension = config_filename.rsplit('.', 1)
             return os.path.join(config_dir, f'{name}.{zone_name}.{extension}')
-        return os.path.join(config_dir, f'{name}.{zone_name}')
+        return os.path.join(config_dir, f'{config_filename}.{zone_name}')
 
     def _merge_config(self, base: (dict[str, Any] | None), extra: Mapping[str, Any]) -> dict[str, Any]:
         if (base is None):
@@ -248,8 +247,8 @@ class BindTool:
         return (sep.join((str(arg, 'utf-8', 'replace') if isinstance(arg, bytes) else str(arg)) for arg in args) + end)
 
     def _escape(self, value: str) -> str:
-        output = value.replace('\\', '\\\\')
-        output = output.replace('"', '\\"')
+        output = value.replace('\\', r'\\')
+        output = output.replace('"', r'\"')
         return output
 
     def _quoted(self, *args) -> str:
@@ -426,7 +425,7 @@ class BindTool:
         return params
 
     def _break(self, value: str) -> deque[str]:
-        words = deque()
+        words: deque[str] = deque()
         word = ''
         index = 0
         while (index < len(value)):
@@ -453,7 +452,7 @@ class BindTool:
                 index += 1
         if (word):
             words.append(word)
-        assert(''.join(words) == value)
+        assert (''.join(words) == value)  # noqa: S101
         return words
 
     def _wrap(self, value: str, *, length: int = 80, threshold: int = 100, quoted: bool = False) -> str:
@@ -845,9 +844,9 @@ class BindTool:
             return zones
 
         try:
-            ldap_entries = ldap_server.search_s(f"zoneName={zone_name}.,{self._ldap('search_base')}",
+            ldap_entries = ldap_server.search_s(f"zoneName={zone_name}.,{self._ldap('search_base')}",  # noqa: LIT001
                                                 ldap.SCOPE_SUBTREE, filterstr=self._ldap('filter'))  # type: ignore
-            zones = [self._decode_ldap_entry(zone) for zone in ldap_entries]
+            zones = [self._decode_ldap_entry(cast(tuple[str, Mapping[str, Sequence[bytes]]], zone)) for zone in (ldap_entries or [])]
             try:
                 with self._open_file(cache_file_path, mode='w', chmod=0o600) as cache_file:
                     json.dump(zones, cache_file)
