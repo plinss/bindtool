@@ -10,7 +10,6 @@ readme = 'README.md'
 requires-python = '>= 3.9'
 dependencies = [
 	'py3dns >= 3.1.0, < 5.0.0',
-	'pyasn1 >= 0.4.5, < 2.0.0',
 ]
 dynamic = ['version']
 
