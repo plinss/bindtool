@@ -7,8 +7,10 @@ build-backend = 'setuptools.build_meta'
 name = 'bindtool'
 description = 'Preprocessor for Bind9 zone files'
 readme = 'README.md'
-requires-python = '>= 3.9'
+requires-python = '>= 3.10'
 dependencies = [
+	'bind9-records >= 1.0.0, < 2.0.0',
+	'cryptography >= 50.0.0',
 	'py3dns >= 3.1.0, < 5.0.0',
 ]
 dynamic = ['version']

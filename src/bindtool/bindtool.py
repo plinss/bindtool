@@ -3,27 +3,44 @@
 from __future__ import annotations
 
 import argparse
-import base64
-import binascii
 import glob
 import hashlib
 import json
 import os
 import re
-import subprocess  # noqa: S404
 import sys
 import unicodedata
-from collections import deque
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from importlib.metadata import version as module_version
-from typing import Any, IO, NoReturn, TYPE_CHECKING, cast
+from typing import Any, IO, NoReturn, TYPE_CHECKING, TypeAlias, cast
 
 import DNS
 
+from bind9_records import (
+    CertificateAuthorityAuthorizationData, DKIMData, DMARCData, Data, Record,
+    SSHFingerprintData, ServiceBindingData, StartOfAuthorityData, TLSAssociationData, TextData,
+)
+
+from cryptography.hazmat.primitives.serialization import (
+    load_der_private_key,
+    load_pem_private_key,
+)
+from cryptography.x509 import (
+    Certificate,
+    DNSName,
+    ExtensionNotFound,
+    SubjectAlternativeName,
+    load_der_x509_certificate,
+    load_pem_x509_certificate,
+)
+from cryptography.x509.oid import ExtensionOID
+
 if (TYPE_CHECKING):
-    from collections.abc import Collection, Sequence
+    from collections.abc import Sequence
     from types import TracebackType
+
+    from cryptography.hazmat.primitives.asymmetric.types import PublicKeyTypes
 
 
 try:
@@ -48,6 +65,9 @@ class BindToolError(Exception):
     pass
 
 
+Params: TypeAlias = dict[str, (str | int | bool | None)]
+
+
 class BindTool:
     """Bind9 zone file processor."""
 
@@ -57,8 +77,8 @@ class BindTool:
     config: dict[str, Any]
     config_dir: str
     vars: dict[str, str]
-    certificates: dict[str, (bytes | None)]
-    public_keys: dict[str, (bytes | None)]
+    certificates: dict[str, (Certificate | None)]
+    public_keys: dict[str, (PublicKeyTypes | None)]
 
     _config_defaults: Mapping[str, Any]
 
@@ -91,7 +111,7 @@ class BindTool:
                 'soa': {
                     'refresh': '4h',
                     'retry': '1h',
-                    'expire': '14d',
+                    'expire': '2w',
                     'minimum': '10m',
                     'master_server': None,
                     'ttl': None,
@@ -154,6 +174,18 @@ class BindTool:
                     'interval': 86400,
                     'percent': 100,
                     'host': None,
+                    'ttl': None,
+                },
+                'svcb': {
+                    'priority': 1,
+                    'target': '.',
+                    'host': '@',
+                    'ttl': None,
+                },
+                'https': {
+                    'priority': 1,
+                    'target': '.',
+                    'host': '@',
                     'ttl': None,
                 },
                 'include': {
@@ -246,13 +278,8 @@ class BindTool:
     def _message(self, *args, sep: str = ' ', end: str = '\n') -> str:
         return (sep.join((str(arg, 'utf-8', 'replace') if isinstance(arg, bytes) else str(arg)) for arg in args) + end)
 
-    def _escape(self, value: str) -> str:
-        output = value.replace('\\', r'\\')
-        output = output.replace('"', r'\"')
-        return output
-
     def _quoted(self, *args) -> str:
-        return ('"' + '", "'.join(self._escape(arg) for arg in args) + '"')
+        return ('"' + '", "'.join(args) + '"')
 
     def _command(self, command: str) -> str:
         return f'{{{command}}}'
@@ -297,11 +324,11 @@ class BindTool:
     def _file_path(self, file_type: str, file_name: str, *, key_type: (str | None) = None, replace_wildcard: bool = True, **kwargs) -> str:
         if (os.path.isabs(file_name)):
             return file_name
-        if (self._directory(file_type) is not None):
-            directory = self._directory(file_type).format(name=file_name, key_type=key_type, suffix=self._key_type_suffix(key_type), **kwargs)
-            file_name = self._file_name(file_type).format(name=file_name, key_type=key_type, suffix=self._key_type_suffix(key_type), **kwargs)
-            return os.path.join(directory, file_name.replace('*', '_') if (replace_wildcard) else file_name)
-        return ''
+        if (not self._directory(file_type)):
+            return ''
+        directory = self._directory(file_type).format(name=file_name, key_type=key_type, suffix=self._key_type_suffix(key_type), **kwargs)
+        file_name = self._file_name(file_type).format(name=file_name, key_type=key_type, suffix=self._key_type_suffix(key_type), **kwargs)
+        return os.path.join(directory, file_name.replace('*', '_') if (replace_wildcard) else file_name)
 
     def _find_file(self, file_types: (str | Sequence[str]), file_name: str, *, key_type: (str | None) = None, **kwargs) -> (str | None):
         if (isinstance(file_types, str)):
@@ -403,7 +430,7 @@ class BindTool:
         return (parts[0][1], parts[1:])
 
     def _parse_args(self, type: str, args: Sequence[tuple[str, str]], param_names: Sequence[str],
-                    defaults: Mapping[str, str], prefixes: Mapping[str, str], command: str) -> dict[str, str]:
+                    defaults: Params, prefixes: Mapping[str, str], command: str) -> Params:
         _args = list(args)
         _names = list(param_names)
         params = self._defaults(type, fill=defaults)
@@ -424,138 +451,67 @@ class BindTool:
                 params[name] = prefix + params[name]
         return params
 
-    def _break(self, value: str) -> deque[str]:
-        words: deque[str] = deque()
-        word = ''
-        index = 0
-        while (index < len(value)):
-            char = value[index]
-            if (' ' == char):
-                if (word):
-                    words.append(word)
-                    word = ''
-                while ((index < len(value)) and (' ' == value[index])):
-                    word += ' '
-                    index += 1
-                words.append(word)
-                word = ''
-            elif ('"' == char):
-                word += char
-                index += 1
-                while ((index < len(value)) and (char != value[index])):
-                    word += value[index]
-                    index += 1
-                word += char
-                index += 1
-            else:
-                word += char
-                index += 1
-        if (word):
-            words.append(word)
-        assert (''.join(words) == value)  # noqa: S101
-        return words
-
-    def _wrap(self, value: str, *, length: int = 80, threshold: int = 100, quoted: bool = False) -> str:
-        if (quoted):
-            threshold -= 2
-            length -= 2
-        if (len(value) <= min(255, threshold)):
-            return (self._quoted(value) if (quoted) else value)
-        length = min(255, length)
-        output = '(\n'
-        line = ''
-        words = self._break(value)
-        while (words):
-            word = words.popleft()
-            if ((not quoted) and word.isspace()):
-                word = ' '
-            if ((len(line) + len(word)) < length):  # word fits on current line
-                line += word
-                continue
-            if ((length < len(word)) or word.isspace()):  # word does not fit on a line by itself or is all space, split it
-                available = (length - len(line))
-                line += word[:available]
-                words.appendleft(word[available:])
-                word = ''
-            if (line):
-                output += f'\t\t{self._quoted(line) if (quoted) else line.rstrip()}\n'
-            line = (word if (quoted) else word.strip())  # start new line
-
-        if (line):
-            output += f'\t\t{self._quoted(line) if (quoted) else line.rstrip()}\n'
-        output += '\t)'
-        return output
-
-    def _record(self, format: str, params: Mapping[str, str], *, end: str = '\n', **kwargs) -> str:
-        _params = dict(params)
-        for key, value in kwargs.items():
-            _params[key] = value
-        return (format.format(**_params) + end)
-
-    def _generic_rr(self, params: Mapping[str, str], type: int, value: bytes) -> str:
-        return self._record('{host}{ttl}\tTYPE{type}\t\\# {len} {data}', params, type=type, len=len(value), data=self._wrap(self._hex(value)))
-
-    def _txt_rr(self, params: Mapping[str, str], host: str, data: str, *, length: int = 80, threshold: int = 100) -> str:
-        output = self._record('{host}{ttl}\tTXT\t', params, host=host, end='')
-        return f'{output}{self._wrap(data, length=length, threshold=threshold, quoted=True)}\n'
-
-    def _hex(self, value: bytes) -> str:
-        return binascii.hexlify(value).decode('ascii')
-
-    def _base64(self, value: bytes) -> str:
-        return base64.b64encode(value).decode('ascii')
-
-    def _sha1(self, value: bytes) -> str:
-        return hashlib.sha1(value).hexdigest()
+    def _rr(self, type: str, params: Params, data: (Data | str), *, name: (str | None) = None) -> str:
+        name = (name if (name is not None) else str(params['host']))
+        ttl = (int(params['ttl']) if (('ttl' in params) and params['ttl']) else None)
+        if (isinstance(data, str)):
+            data = Data.create(data, record_type=type)
+        return f'{Record(name=name, ttl=ttl, type=type, data=data)}\n'
 
     def _sha256(self, value: bytes) -> str:
         return hashlib.sha256(value).hexdigest()
 
-    def _sha512(self, value: bytes) -> str:
-        return hashlib.sha512(value).hexdigest()
+    def _load_certificate(self, cert_file_path: str) -> (Certificate | None):
+        if (cert_file_path in self.certificates):
+            return self.certificates[cert_file_path]
 
-    def _openssl(self, *args: str) -> bytes:
-        return subprocess.check_output(['openssl', *args], stderr=subprocess.DEVNULL)  # noqa: S603, S607
+        self._debug('Loading certificate', cert_file_path)
+        with open(cert_file_path, 'rb') as cert_file:
+            cert_data = cert_file.read()
+        try:
+            if (b'-----BEGIN CERTIFICATE-----' in cert_data):
+                certificate = load_pem_x509_certificate(cert_data)
+            else:
+                certificate = load_der_x509_certificate(cert_data)
+        except ValueError:
+            certificate = None
+        self.certificates[cert_file_path] = certificate
+        return certificate
 
-    def _load_certificates(self, cert_file_name: str, type: str, *, username: str = '') -> Sequence[bytes]:
-        certificates: list[bytes] = []
+    def _load_certificates(self, cert_file_name: str, type: str, *, username: str = '') -> Sequence[Certificate]:
+        certificates: list[Certificate] = []
         username = (f'{username}@' if (username) else username)
         key_types = [type] if (type) else ['rsa', 'ecdsa']
 
         for key_type in key_types:
             cert_file_path = self._find_file('certificate', cert_file_name, key_type=key_type, username=username)
             if (cert_file_path):
-                if (cert_file_path in self.certificates):
-                    certificate = self.certificates[cert_file_path]
-                else:
-                    self._debug('Loading certificate', cert_file_path)
-                    certificate = self._openssl('x509', '-in', cert_file_path, '-outform', 'DER')
-                    self.certificates[cert_file_path] = certificate
+                certificate = self._load_certificate(cert_file_path)
                 if (certificate):
                     certificates.append(certificate)
         if (not certificates):
             self._warn('Certificate file', cert_file_name, 'not found')
         return certificates
 
-    def _extract_public_key(self, public_key_pem: bytes) -> (bytes | None):
-        if (public_key_pem):
-            match = re.match(r'-----BEGIN PUBLIC KEY-----(.*?)-----END PUBLIC KEY-----', public_key_pem.decode('ascii'), re.DOTALL)
-            if (match):
-                return base64.b64decode(match.group(1))
-        return None
+    def _load_private_key(self, private_key_path: str, passphrase: str) -> (PublicKeyTypes | None):
+        if (private_key_path in self.public_keys):
+            return self.public_keys[private_key_path]
 
-    def _public_key_from_certificate(self, cert_file_path: str) -> (bytes | None):
-        return self._extract_public_key(self._openssl('x509', '-in', cert_file_path, '-pubkey', '-noout'))
+        self._debug('Loading public key from private key', private_key_path)
+        with open(private_key_path, 'rb') as private_key_file:
+            private_key_data = private_key_file.read()
+        password = (passphrase.encode('utf-8') if (passphrase) else None)
+        if ((b'-----BEGIN PRIVATE KEY-----' in private_key_data) or (b'-----BEGIN ENCRYPTED PRIVATE KEY-----' in private_key_data)):
+            private_key = load_pem_private_key(private_key_data, password)
+        else:
+            private_key = load_der_private_key(private_key_data, password)
 
-    def _public_key_from_private_key(self, private_key_path: str, passphrase: str) -> (bytes | None):
-        pass_arg = ['-passin', f'pass:{passphrase}'] if (passphrase) else []
-        try:
-            return self._extract_public_key(self._openssl('rsa', '-in', private_key_path, '-pubout', *pass_arg))
-        except Exception:
-            return self._extract_public_key(self._openssl('ec', '-in', private_key_path, '-pubout', *pass_arg))
+        public_key = private_key.public_key()
+        self.public_keys[private_key_path] = public_key
+        return public_key
 
-    def _load_public_keys(self, cert_file_name: str, type: str, passphrase: str, *, username: str = '') -> Sequence[bytes]:
-        public_keys: list[bytes] = []
+    def _load_public_keys(self, cert_file_name: str, type: str, passphrase: str, *, username: str = '') -> Sequence[PublicKeyTypes]:
+        public_keys: list[PublicKeyTypes] = []
         username = (f'{username}@' if (username) else username)
         key_types = [type] if (type) else ['rsa', 'ecdsa']
 
@@ -565,8 +521,8 @@ class BindTool:
                 if (cert_file_path in self.public_keys):
                     public_key = self.public_keys[cert_file_path]
                 else:
-                    self._debug('Loading public key from certificate', cert_file_path)
-                    public_key = self._public_key_from_certificate(cert_file_path)
+                    certificate = self._load_certificate(cert_file_path)
+                    public_key = (certificate.public_key() if (certificate is not None) else None)
                     self.public_keys[cert_file_path] = public_key
                 if (public_key):
                     public_keys.append(public_key)
@@ -574,60 +530,43 @@ class BindTool:
                 private_key_path = self._find_file(['private_key', 'backup_key', 'previous_key'],
                                                    cert_file_name, key_type=key_type, username=username)
                 if (private_key_path):
-                    if (private_key_path in self.public_keys):
-                        public_key = self.public_keys[private_key_path]
-                    else:
-                        self._debug('Loading public key from private key', private_key_path)
-                        public_key = self._public_key_from_private_key(private_key_path, passphrase)
-                        self.public_keys[private_key_path] = public_key
+                    public_key = self._load_private_key(private_key_path, passphrase)
                     if (public_key):
                         public_keys.append(public_key)
         if (not public_keys):
             self._warn('Certificate or private key file not found for', cert_file_name)
         return public_keys
 
-    def _alternative_names_from_certificate(self, cert_file_name: str, type: str) -> Collection[str]:
-        alternative_names = set()
-        key_types = [type] if (type) else ['rsa', 'ecdsa']
-        regex = re.compile(r'.*X509v3 Subject Alternative Name:\s*([^\n]*)\n.*', re.DOTALL)
-
-        for key_type in key_types:
-            cert_file_path = self._find_file('certificate', cert_file_name, key_type=key_type, username='')
-            if (cert_file_path):
-                self._debug('Loading alternative names from certificate', cert_file_path)
-                match = regex.match(self._openssl('x509', '-in', cert_file_path, '-noout', '-text').decode('ascii'))
-                if (match):
-                    alternative_names |= {name[4:] for name in match.group(1).split(', ') if name.startswith('DNS:')}
-        return alternative_names
-
-    def _load_dkim_public_key(self, selector: str, domain: str) -> (bytes | None):
+    def _load_dkim_public_key(self, selector: str, domain: str) -> (PublicKeyTypes | None):
         key_file_path = self._find_file('dkim', domain, selector=selector, domain=domain)
         if (key_file_path):
-            return self._openssl('rsa', '-in', key_file_path, '-outform', 'DER', '-pubout')
+            return self._load_private_key(key_file_path, '')
         self._warn('DKIM key', selector, 'for', domain, 'not found')
         return None
 
-    def _validate(self, params: dict[str, str], command: str, param: str, values: Sequence[str], *, convert: (Sequence[str] | None) = None) -> None:
+    def _validate(self, params: Params, command: str, param: str, values: Sequence[str], *, convert: (Sequence[str] | None) = None) -> None:
         if (params[param] not in values):
             self._error('Unknown value', self._quoted(params[param]), 'for', param, 'in', self._command(command), '.\n',
                         'Must be one of:', self._quoted(*values))
         if (convert):
             params[param] = convert[values.index(params[param])]
 
-    def _validate_numeric(self, params: Mapping[str, str], command: str, param: str) -> None:
-        if (not params[param].isdigit()):
+    def _validate_numeric(self, params: Params, command: str, param: str) -> None:
+        value = params[param]
+        if ((value is None) or (isinstance(value, str) and not value.isdigit())):
             self._error(param.title(), 'must be numeric for', self._command(command))
+        params[param] = int(value)
 
     def soa_record(self, args: Sequence[tuple[str, str]], command: str, zone_name: str) -> str:
         params = self._parse_args('soa', args, ['primary_server', 'admin', 'refresh', 'retry', 'expire', 'minimum', 'master_server', 'ttl'],
-                                  {}, {'ttl': '\t'}, command)
+                                  {}, {}, command)
         if ('primary_server' not in params):
             self._error('soa record must specify primary server', self._command(command))
         if ('admin' not in params):
             self._error('soa record must specify admin', self._command(command))
-        if (not params['primary_server'].endswith('.')):
-            params['primary_server'] += '.'
-        params['admin'] = params['admin'].replace('@', '.')
+        if (not str(params['primary_server']).endswith('.')):
+            params['primary_server'] = (str(params['primary_server']) + '.')
+        params['admin'] = str(params['admin']).replace('@', '.')
         if (not params['admin'].endswith('.')):
             params['admin'] += '.'
 
@@ -642,28 +581,27 @@ class BindTool:
         serial = max(int(datetime.now(timezone.utc).strftime('%Y%m%d00')), existing_serial + 1)
         self._debug('Using serial number', serial)
 
-        return self._record('@{ttl}\tSOA\t{primary_server} {admin} {serial} {refresh} {retry} {expire} {minimum}', params, serial=serial)
+        params['primary'] = params['primary_server']
+        params['serial'] = serial
+        return self._rr('SOA', params, StartOfAuthorityData.create(None, **params), name='@')
 
     def sshfp_record(self, args: Sequence[tuple[str, str]], command: str, zone_name: str) -> str:
-        params = self._parse_args('sshfp', args, ['host', 'key_file', 'ttl', 'type'], {}, {'ttl': '\t'}, command)
+        params = self._parse_args('sshfp', args, ['host', 'key_file', 'ttl', 'type'], {}, {}, command)
         self._validate(params, command, 'type', ('', 'rsa', 'dsa', 'ecdsa', 'ed25519'))
 
-        key_type_value = {'rsa': 1, 'dsa': 2, 'ecdsa': 3, 'ed25519': 4}
-        key_types = [params['type']] if (params['type']) else ['rsa', 'dsa', 'ecdsa', 'ed25519']
+        key_types = [str(params['type'])] if (params['type']) else ['rsa', 'dsa', 'ecdsa', 'ed25519']
 
         found = False
         output = ''
         for key_type in key_types:
-            key_file_path = self._find_file('ssh', params['key_file'], key_type=key_type)
+            key_file_path = self._find_file('ssh', str(params['key_file']), key_type=key_type)
             if (key_file_path):
                 found = True
                 try:
                     with open(key_file_path) as key_file:
-                        key_text = key_file.read().split(' ')
-                        key = base64.b64decode(key_text[1])
-
-                        output += self._record('{host}{ttl}\tSSHFP\t{key_type} 1 {digest}', params, key_type=key_type_value[key_type], digest=self._sha1(key))
-                        output += self._record('{host}{ttl}\tSSHFP\t{key_type} 2 {digest}', params, key_type=key_type_value[key_type], digest=self._sha256(key))
+                        public_key = key_file.read()
+                        output += self._rr('SSHFP', params, SSHFingerprintData(type='sha1', public_key=public_key))
+                        output += self._rr('SSHFP', params, SSHFingerprintData(type='sha256', public_key=public_key))
                 except Exception as error:
                     self._error('Unable to read key from', key_file_path, self._indent(error))
         if (not found):
@@ -672,53 +610,59 @@ class BindTool:
 
     def tlsa_record(self, args: Sequence[tuple[str, str]], command: str, zone_name: str) -> str:
         params = self._parse_args('tlsa', args, ['port', 'host', 'cert_file', 'usage', 'selector', 'proto', 'ttl', 'type', 'pass'],
-                                  {'cert_file': zone_name}, {'host': '.', 'ttl': '\t'}, command)
+                                  {'cert_file': zone_name}, {'host': '.'}, command)
         self._validate_numeric(params, command, 'port')
-        self._validate(params, command, 'usage', ('pkix-ta', 'pkix-ee', 'dane-ta', 'dane-ee'), convert=('0', '1', '2', '3'))
-        self._validate(params, command, 'selector', ('cert', 'spki'), convert=('0', '1'))
+        self._validate(params, command, 'usage', ('pkix-ta', 'pkix-ee', 'dane-ta', 'dane-ee'))
+        self._validate(params, command, 'selector', ('cert', 'spki'))
         self._validate(params, command, 'proto', ('tcp', 'udp', 'sctp', 'dccp'))
         self._validate(params, command, 'type', ('', 'rsa', 'ecdsa'))
 
-        if ('cert' == params['selector']):
-            payloads = self._load_certificates(params['cert_file'], params['type'])
-        else:
-            payloads = self._load_public_keys(params['cert_file'], params['type'], params['pass'])
-        if (not payloads):
-            return ''
-
+        name = '_{port}._{proto}{host}'.format(**params)  # noqa: FS002
         output = ''
-        for payload in payloads:
-            output += self._record('_{port}._{proto}{host}{ttl}\tTLSA\t{usage} {selector} 1 {digest}', params, digest=self._sha256(payload))
-            output += self._record('_{port}._{proto}{host}{ttl}\tTLSA\t{usage} {selector} 2 {digest}', params, digest=self._sha512(payload))
+        if ('cert' == params['selector']):
+            certificates = self._load_certificates(str(params['cert_file']), str(params['type']))
+            for certificate in certificates:
+                output += self._rr('TLSA', params, TLSAssociationData.create(None, certificate=certificate, matching=1, **params), name=name)
+                output += self._rr('TLSA', params, TLSAssociationData.create(None, certificate=certificate, matching=2, **params), name=name)
+        else:
+            public_keys = self._load_public_keys(str(params['cert_file']), str(params['type']), str(params['pass']))
+            for public_key in public_keys:
+                output += self._rr('TLSA', params, TLSAssociationData.create(None, public_key=public_key, matching=1, **params), name=name)
+                output += self._rr('TLSA', params, TLSAssociationData.create(None, public_key=public_key, matching=2, **params), name=name)
         return output
 
     def tlsa_cert_record(self, args: Sequence[tuple[str, str]], command: str, zone_name: str) -> str:
         params = self._parse_args('tlsa_cert', args, ['port', 'cert_file', 'usage', 'selector', 'proto', 'ttl', 'type'],
-                                  {'cert_file': zone_name}, {'ttl': '\t'}, command)
+                                  {'cert_file': zone_name}, {}, command)
         self._validate_numeric(params, command, 'port')
-        self._validate(params, command, 'usage', ('pkix-ta', 'pkix-ee', 'dane-ta', 'dane-ee'), convert=('0', '1', '2', '3'))
-        self._validate(params, command, 'selector', ('cert', 'spki'), convert=('0', '1'))
+        self._validate(params, command, 'usage', ('pkix-ta', 'pkix-ee', 'dane-ta', 'dane-ee'))
+        self._validate(params, command, 'selector', ('cert', 'spki'))
         self._validate(params, command, 'proto', ('tcp', 'udp', 'sctp', 'dccp'))
         self._validate(params, command, 'type', ('', 'rsa', 'ecdsa'))
 
-        alternative_names = self._alternative_names_from_certificate(params['cert_file'], params['type'])
-        if (not alternative_names):
+        certificates = self._load_certificates(str(params['cert_file']), str(params['type']))
+        if (not certificates):
             return ''
 
-        if ('cert' == params['selector']):
-            payloads = self._load_certificates(params['cert_file'], params['type'])
-        else:
-            payloads = self._load_public_keys(params['cert_file'], params['type'], params['pass'])
-        if (not payloads):
+        alternative_names: set[str] = set()
+        for certificate in certificates:
+            try:
+                san = certificate.extensions.get_extension_for_oid(ExtensionOID.SUBJECT_ALTERNATIVE_NAME)
+                alternative_names.update(cast(SubjectAlternativeName, san.value).get_values_for_type(DNSName))
+            except ExtensionNotFound:
+                pass
+
+        if (not alternative_names):
             return ''
 
         output = ''
         for host in sorted(alternative_names):
             if ('*' in host):
                 self._error('tlsa_cert record certificate', params['cert_file'], 'must not include wildcard hosts')
-            for payload in payloads:
-                output += self._record('_{port}._{proto}.{host}{ttl}\tTLSA\t{usage} {selector} 1 {digest}', params, host=host, digest=self._sha256(payload))
-                output += self._record('_{port}._{proto}.{host}{ttl}\tTLSA\t{usage} {selector} 2 {digest}', params, host=host, digest=self._sha512(payload))
+            name = '_{port}._{proto}{host}'.format(host=host, **params)  # noqa: FS002
+            for certificate in certificates:
+                output += self._rr('TLSA', params, TLSAssociationData.create(None, certificate=certificate, matching=1, **params), name=name)
+                output += self._rr('TLSA', params, TLSAssociationData.create(None, certificate=certificate, matching=2, **params), name=name)
         return output
 
     def _email_hash(self, localpart: str) -> str:
@@ -729,79 +673,68 @@ class BindTool:
 
     def smimea_record(self, args: Sequence[tuple[str, str]], command: str, zone_name: str) -> str:
         params = self._parse_args('smimea', args, ['user', 'host', 'cert_file', 'usage', 'selector', 'ttl', 'type', 'pass'],
-                                  {'cert_file': zone_name}, {'host': '.', 'ttl': '\t'}, command)
+                                  {'cert_file': zone_name}, {'host': '.'}, command)
         if ('user' not in params):
             self._error('smimea record must specify user', self._command(command))
-        self._validate(params, command, 'usage', ('pkix-ta', 'pkix-ee', 'dane-ta', 'dane-ee'), convert=('0', '1', '2', '3'))
-        self._validate(params, command, 'selector', ('cert', 'spki'), convert=('0', '1'))
+        self._validate(params, command, 'usage', ('pkix-ta', 'pkix-ee', 'dane-ta', 'dane-ee'))
+        self._validate(params, command, 'selector', ('cert', 'spki'))
         self._validate(params, command, 'type', ('', 'rsa', 'ecdsa'))
 
-        userhash = self._email_hash(params['user'])
-
-        if ('cert' == params['selector']):
-            payloads = self._load_certificates(params['cert_file'], params['type'], username=params['user'])
-        else:
-            payloads = self._load_public_keys(params['cert_file'], params['type'], params['pass'], username=params['user'])
-        if (not payloads):
-            return ''
-
+        name = '{userhash}._smimecert{host}'.format(userhash=self._email_hash(str(params['user'])), **params)  # noqa: FS002
         output = ''
-        for payload in payloads:
-            if ('cert' == params['selector']):
-                output += self._record('{userhash}._smimecert{host}{ttl}\tSMIMEA\t{usage} {selector} 0 {cert}', params, userhash=userhash,
-                                       cert=self._wrap(self._hex(payload), length=120, threshold=125))
-            output += self._record('{userhash}._smimecert{host}{ttl}\tSMIMEA\t{usage} {selector} 1 {digest}', params, userhash=userhash,
-                                   digest=self._sha256(payload))
-            output += self._record('{userhash}._smimecert{host}{ttl}\tSMIMEA\t{usage} {selector} 2 {digest}', params, userhash=userhash,
-                                   digest=self._sha512(payload))
+        if ('cert' == params['selector']):
+            certificates = self._load_certificates(str(params['cert_file']), str(params['type']), username=str(params['user']))
+            for certificate in certificates:
+                output += self._rr('SMIMEA', params, TLSAssociationData.create(None, certificate=certificate, matching=0, **params), name=name)
+                output += self._rr('SMIMEA', params, TLSAssociationData.create(None, certificate=certificate, matching=1, **params), name=name)
+                output += self._rr('SMIMEA', params, TLSAssociationData.create(None, certificate=certificate, matching=2, **params), name=name)
+        else:
+            public_keys = self._load_public_keys(str(params['cert_file']), str(params['type']), str(params['pass']), username=str(params['user']))
+            for public_key in public_keys:
+                output += self._rr('SMIMEA', params, TLSAssociationData.create(None, public_key=public_key, matching=1, **params), name=name)
+                output += self._rr('SMIMEA', params, TLSAssociationData.create(None, public_key=public_key, matching=2, **params), name=name)
         return output
 
     def acme_record(self, args: Sequence[tuple[str, str]], command: str, zone_name: str) -> str:
-        params = self._parse_args('acme', args, ['challenge_file', 'ttl'], {'challenge_file': zone_name}, {'ttl': '\t'}, command)
+        params = self._parse_args('acme', args, ['challenge_file', 'ttl'], {'challenge_file': zone_name}, {}, command)
 
         output = ''
-        challenge_path = self._find_file('acme', params['challenge_file'])
+        challenge_path = self._find_file('acme', str(params['challenge_file']))
         if (challenge_path):
             with open(challenge_path) as challenge_file:
                 challenges = json.load(challenge_file)
             for host in challenges:
-                output += self._txt_rr(params, '_acme-challenge.' + (host[2:] if (host.startswith('*.')) else host) + '.', challenges[host])
+                name = ('_acme-challenge.' + (host[2:] if (host.startswith('*.')) else host) + '.')
+                output += self._rr('TXT', params, TextData.create(challenges[host]), name=name)
         else:
             self._debug('ACME challenge file', params['challenge_file'], 'not found')
         return output
 
-    def _caa_rr(self, params: Mapping[str, str], flag: str, tag: str, caname: str) -> str:
-        return self._generic_rr(params, 257,
-                                int(flag).to_bytes(1, byteorder='big') + len(tag).to_bytes(1, byteorder='big')
-                                + tag.encode('ascii') + caname.encode('ascii'))
-
     def caa_record(self, args: Sequence[tuple[str, str]], command: str, zone_name: str) -> str:
-        params = self._parse_args('caa', args, ['tag', 'caname', 'host', 'flag', 'ttl'], {}, {'ttl': '\t'}, command)
+        params = self._parse_args('caa', args, ['tag', 'value', 'host', 'flag', 'ttl'], {}, {}, command)
         if ('tag' not in params):
             self._error('caa record must specify tag', self._command(command))
-        if ('caname' not in params):
-            self._error('caa record must specify caname', self._command(command))
+        if ('value' not in params):
+            self._error('caa record must specify value', self._command(command))
         self._validate_numeric(params, command, 'flag')
 
-        return self._caa_rr(params, params['flag'], params['tag'], params['caname'])
+        return self._rr('CAA', params, CertificateAuthorityAuthorizationData.create(None, **params))
 
     def dkim_record(self, args: Sequence[tuple[str, str]], command: str, zone_name: str) -> str:
-        params = self._parse_args('dkim', args, ['selector', 'domain', 'host', 'ttl'], {'domain': zone_name}, {'host': '.', 'ttl': '\t'}, command)
-        dkim_public_key = self._load_dkim_public_key(params['selector'], params['domain'])
-        if (dkim_public_key):
-            host = self._record('{selector}._domainkey{host}', params, end='')
-            return self._txt_rr(params, host, f'v=DKIM1; k=rsa; p={self._base64(dkim_public_key)}')
+        params = self._parse_args('dkim', args, ['selector', 'domain', 'host', 'ttl'], {'domain': zone_name}, {'host': '.'}, command)
+        public_key = self._load_dkim_public_key(str(params['selector']), str(params['domain']))
+        if (public_key):
+            name = '{selector}._domainkey{host}'.format(**params)  # noqa: FS002
+            return self._rr('TXT', params, DKIMData.create(public_key=public_key), name=name)
         return ''
 
     def dmarc_record(self, args: Sequence[tuple[str, str]], command: str, zone_name: str) -> str:
         params = self._parse_args('dmarc', args, ['policy', 'rua', 'ruf', 'subdomain_policy', 'options', 'dkim_alignment', 'spf_alignment',
                                                   'report_format', 'interval', 'percent', 'host', 'ttl'],
-                                  {}, {'host': '.', 'ttl': '\t'}, command)
+                                  {}, {'host': '.'}, command)
 
-        if (params['rua']):
-            params['rua'] = 'rua=' + ','.join([f'mailto:{addr.strip()}' for addr in params['rua'].split(',')]) + '; '
-        if (params['ruf']):
-            params['ruf'] = 'ruf=' + ','.join([f'mailto:{addr.strip()}' for addr in params['ruf'].split(',')]) + '; '
+        params['rua'] = (','.join([f'mailto:{addr.strip()}' for addr in str(params['rua']).split(',')]) if (params['rua']) else None)
+        params['ruf'] = (','.join([f'mailto:{addr.strip()}' for addr in str(params['ruf']).split(',')]) if (params['ruf']) else None)
 
         self._validate(params, command, 'policy', ('none', 'quarantine', 'reject'))
         self._validate(params, command, 'subdomain_policy', ('none', 'quarantine', 'reject'))
@@ -812,18 +745,51 @@ class BindTool:
         self._validate_numeric(params, command, 'interval')
         self._validate_numeric(params, command, 'percent')
 
-        return self._txt_rr(params, self._record('_dmarc{host}', params, end=''),
-                            self._record('v=DMARC1; p={policy}; {rua}{ruf}sp={subdomain_policy}; fo={options}; adkim={dkim_alignment}; aspf={spf_alignment}; '
-                                         'rf={report_format}; ri={interval}; pct={percent};', params, end=''))
+        name = '_dmarc{host}'.format(**params)  # noqa: FS002
+        return self._rr('TXT', params, DMARCData.create(None, value=None,
+                                                        failure_options=params['options'],
+                                                        report_url_aggregate=params['rua'],
+                                                        report_url_forensic=params['ruf'],
+                                                        report_interval=params['interval'],
+                                                        **params), name=name)
 
     def pgp_record(self, args: Sequence[tuple[str, str]], command: str, zone_name: str) -> str:
         self._error('pgp records not yet supported')
         return ''
 
+    def svcb_record(self, args: Sequence[tuple[str, str]], command: str, zone_name: str) -> str:
+        params = self._parse_args('svcb', args, ('priority', 'target', 'alpn', 'no_default_alpn', 'port', 'ipv4hint', 'ipv6hint', 'mandatory', 'host', 'ttl'),
+                                  {}, {}, command)
+
+        self._validate_numeric(params, command, 'priority')
+        if ('port' in params):
+            self._validate_numeric(params, command, 'port')
+
+        if ('no_default_alpn' in params):
+            params['no_default_alpn'] = True
+
+        return self._rr('SVCB', params, ServiceBindingData.create(None, **params))
+
+    def https_record(self, args: Sequence[tuple[str, str]], command: str, zone_name: str) -> str:
+        params = self._parse_args('svcb', args, ['priority', 'target', 'alpn', 'no_default_alpn', 'port', 'ipv4hint', 'ipv6hint', 'mandatory', 'host', 'ttl'],
+                                  {}, {}, command)
+
+        self._validate_numeric(params, command, 'priority')
+        if ('port' in params):
+            self._validate_numeric(params, command, 'port')
+
+        if ('no_default_alpn' in params):
+            params['no_default_alpn'] = True
+
+        return self._rr('HTTPS', params, ServiceBindingData.create(None, **params))
+
     def _decode_ldap_entry(self, zone: tuple[str, Mapping[str, Sequence[bytes]]]) -> Mapping[str, Sequence[str]]:
         return {key: [value.decode('ascii') for value in values] for key, values in zone[1].items()}
 
     def _load_ldap_zones(self, zone_name: str) -> Sequence[Mapping[str, Sequence[str]]]:
+        if (not LDAP_AVAILABLE):
+            self._error('LDAP module not installed. Run `pip install python-ldap`.')
+
         zones: list[Mapping[str, Sequence[str]]] = []
         cache_file_path = self._file_path('cache', zone_name)
         if (os.path.isfile(cache_file_path)):
@@ -844,7 +810,7 @@ class BindTool:
             return zones
 
         try:
-            ldap_entries = ldap_server.search_s(f"zoneName={zone_name}.,{self._ldap('search_base')}",  # noqa: LIT001
+            ldap_entries = ldap_server.search_s(f"zoneName={zone_name}.,{self._ldap('search_base')}",
                                                 ldap.SCOPE_SUBTREE, filterstr=self._ldap('filter'))  # type: ignore
             zones = [self._decode_ldap_entry(cast(tuple[str, Mapping[str, Sequence[bytes]]], zone)) for zone in (ldap_entries or [])]
             try:
@@ -858,9 +824,6 @@ class BindTool:
         return zones
 
     def ldap_record(self, args: Sequence[tuple[str, str]], command: str, zone_name: str) -> str:
-        if (not LDAP_AVAILABLE):
-            self._error('LDAP module not installed. Run `pip install python-ldap`.')
-
         zones = self._load_ldap_zones(zone_name)
         output = ''
         record_type_map = {
@@ -882,18 +845,12 @@ class BindTool:
             'aFSDBRecord': 'AFSDB',
         }
 
-        def _record(record_type: str, host: str, data: str) -> str:
-            if ('TXT' == record_type):
-                return self._txt_rr({'ttl': ''}, host, data)
-            data = data.replace(';', r'\;')
-            return f'{host}\t{record_type}\t{self._wrap(data)}\n'
-
         for zone in zones:
             if (zone['zoneName'][0] == (zone_name + '.')):
                 for record_type in record_type_map:
                     if (record_type in zone):
-                        for record in zone[record_type]:
-                            output += _record(record_type_map[record_type], zone['relativeDomainName'][0], record)
+                        for data in zone[record_type]:
+                            output += self._rr(record_type_map[record_type], {}, data, name=zone['relativeDomainName'][0])
         return output
 
     def include(self, args: Sequence[tuple[str, str]], command: str, zone_name: str, zone_file_path: str, param_vars: Mapping[str, str]) -> tuple[str, bool]:
@@ -902,16 +859,16 @@ class BindTool:
             self._error('Include file path not specified')
         hold_include_parent = self.config['directories'].get('include_parent')
         self.config['directories']['include_parent'] = os.path.dirname(os.path.realpath(zone_file_path))
-        include_file_paths = self._find_files(['include_parent', 'zone_file', 'include'], params['file'])
+        include_file_paths = self._find_files(['include_parent', 'zone_file', 'include'], str(params['file']))
         self.config['directories']['include_parent'] = hold_include_parent
-        if ((not include_file_paths) and ('*' not in params['file']) and ('?' not in params['file'])):
+        if ((not include_file_paths) and ('*' not in str(params['file'])) and ('?' not in str(params['file']))):
             self._error('Include file', self._quoted(params['file']), 'not found')
         del params['file']
         local_vars: dict[str, str] = {}
         for key, value in param_vars.items():
             local_vars[key] = value
         for key, value in params.items():
-            local_vars[key] = value
+            local_vars[key] = str(value)
 
         output = ''
         has_soa = False
@@ -972,6 +929,10 @@ class BindTool:
                             output = self._append(output, self.dmarc_record(args, command, zone_name))
                         elif ('pgp' == record):
                             output = self._append(output, self.pgp_record(args, command, zone_name))
+                        elif ('svcb' == record):
+                            output = self._append(output, self.svcb_record(args, command, zone_name))
+                        elif ('https' == record):
+                            output = self._append(output, self.https_record(args, command, zone_name))
                         elif ('ldap' == record):
                             output = self._append(output, self.ldap_record(args, command, zone_name))
                         elif ('include' == record):

@@ -460,7 +460,7 @@ The default value is `relaxed`.
 The default value is `relaxed`.
 * `report_format` is one of the following: `afrf`, `iodef`.
 The default value is `afrf`.
-* `interval` is a numeric value (seconds).
+* `interval` is a numeric value (seconds) or a Bind time value.
 The default values is `86400` (1 day).
 * `percent` is a numeric value from 0 to 100.
 The default value is `100`.
@@ -500,6 +500,41 @@ Example:
 Becomes:
 
     @   TYPE257 \# 22 010569737375656c657473656e63727970742e6f7267
+
+
+
+### SVCB/HTTPS Records
+
+SVCB and HTTPS records are specified as follows:
+
+    {{svcb:priority:target:alpn:no_default_alpn:port:ipv4hint:ipv6hint:iphint:mandatory:host:ttl}}
+
+All arguments are optional.
+
+* `priority` is the SvcPriority of the record.
+The default value is `1`.
+* `target` is the domain name of the alias target or the alternative endpoint.
+The default value is `.`.
+* `alpn` is the set of ALPN identifiers, multiple values are separated by commas.
+* `no_default_alpn` if present add the `no-default-alpn` SvcParam.
+* `port` is the numeric value of the port for the endpoint.
+* `ipv4hint` is a list of IPv4 address hints, separated by commas.
+* `ipv6hint` is a list of IPv6 address hints, separated by commas.
+Note that colons in IPv6 addresses must be escaped, e.g. `2001\:\:1`.
+* `iphint` specified both IPv4 and IPv6 address hints in a single argument, they are sorted into the appropriate paramaters.
+* `mandatory` is the set of SvcParam keys that are considered mandatory, separated by commas.
+* `host` is the host name for the SVCB or HTTPS record.
+The default value is `@`
+* `ttl` is the TTL value for the CAA record.
+The default value is empty.
+
+Example:
+
+    {{https:alpn=h2,h3:iphint=1.2.3.4}}
+
+Becomes:
+
+    @   HTTPS   1 . alpn=h2,h3 ipv4hint=1.2.3.4
 
 
 ### LDAP Records

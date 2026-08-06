@@ -1,5 +1,5 @@
 ---
-image: python:3.13-trixie
+image: python:3.10-trixie
 
 
 .setup:
@@ -48,7 +48,6 @@ test:
   parallel:
     matrix:
       - TEST_PYTHON_VERSION:
-        - '3.9'
         - '3.10'
         - '3.11'
         - '3.12'
