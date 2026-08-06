@@ -9,7 +9,7 @@ This greatly simplifies keeping DNS zones current when keys change as no zone fi
 
 ## Installation
 
-Requires Python 3.9+.
+Requires Python 3.10+.
 
     sudo pip3 install bindtool
 
