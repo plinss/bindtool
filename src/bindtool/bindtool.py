@@ -818,8 +818,8 @@ class BindTool:
             except Exception as error:
                 self._error('Unable to save ldap cache', self._indent(error))
 
-        except Exception:
-            pass
+        except Exception as error:
+            self._warn('Unable to fetch records from LDAP server', self._indent(error))
         return zones
 
     def ldap_record(self, args: Sequence[tuple[str, str]], command: str, zone_name: str) -> str:
