@@ -10,7 +10,7 @@ import os
 import re
 import sys
 import unicodedata
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from importlib.metadata import version as module_version
 from typing import Any, IO, NoReturn, TYPE_CHECKING, TypeAlias, cast
@@ -37,7 +37,6 @@ from cryptography.x509 import (
 from cryptography.x509.oid import ExtensionOID
 
 if (TYPE_CHECKING):
-    from collections.abc import Sequence
     from types import TracebackType
 
     from cryptography.hazmat.primitives.asymmetric.types import PublicKeyTypes
