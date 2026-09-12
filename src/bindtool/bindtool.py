@@ -67,6 +67,9 @@ class BindToolError(Exception):
 Params: TypeAlias = dict[str, (str | int | bool | None)]
 
 
+PEM_RE = re.compile(rb'^-----BEGIN (?P<label>([\x21-\x2C\x2E-\x7E]+)([ -]?[\x21-\x2C\x2E-\x7E]+)*)-----$', re.MULTILINE)
+
+
 class BindTool:
     """Bind9 zone file processor."""
 
@@ -468,7 +471,7 @@ class BindTool:
         with open(cert_file_path, 'rb') as cert_file:
             cert_data = cert_file.read()
         try:
-            if (b'-----BEGIN CERTIFICATE-----' in cert_data):
+            if (PEM_RE.match(cert_data)):
                 certificate = load_pem_x509_certificate(cert_data)
             else:
                 certificate = load_der_x509_certificate(cert_data)
@@ -500,7 +503,7 @@ class BindTool:
         with open(private_key_path, 'rb') as private_key_file:
             private_key_data = private_key_file.read()
         password = (passphrase.encode('utf-8') if (passphrase) else None)
-        if ((b'-----BEGIN PRIVATE KEY-----' in private_key_data) or (b'-----BEGIN ENCRYPTED PRIVATE KEY-----' in private_key_data)):
+        if (PEM_RE.match(private_key_data)):
             private_key = load_pem_private_key(private_key_data, password)
         else:
             private_key = load_der_private_key(private_key_data, password)
